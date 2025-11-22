@@ -5,6 +5,7 @@ local Config = require('render-markdown.lib.config')
 ---@field enabled boolean
 ---@field log_level render.md.log.Level
 ---@field log_runtime boolean
+---@field render_in_diff boolean
 ---@field file_types string[]
 ---@field max_file_size number
 ---@field ignore fun(buf: integer): boolean
@@ -29,6 +30,7 @@ function M.setup(config)
     M.enabled = config.enabled
     M.log_level = config.log_level
     M.log_runtime = config.log_runtime
+    M.render_in_diff = config.render_in_diff
     M.file_types = config.file_types
     M.max_file_size = config.max_file_size
     M.ignore = config.ignore
@@ -101,6 +103,7 @@ function M.validate()
                 enum = { 'trace', 'debug', 'info', 'warn', 'error', 'off' },
             },
             log_runtime = { type = 'boolean' },
+            render_in_diff = { type = 'boolean' },
             file_types = { list = { type = 'string' } },
             max_file_size = { type = 'number' },
             ignore = { type = 'function' },
