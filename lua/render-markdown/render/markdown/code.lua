@@ -163,7 +163,8 @@ function Render:language(info, language, delim)
 
     local line = prefix:extend(body)
     if self.config.width == 'full' then
-        line:rep(border, vim.o.columns, border_hl)
+        local max_width = self.context.config.max_width
+        line:rep(border, env.win.width(self.context.win, max_width), border_hl)
     end
     return self.marks:start(self.config, 'code_language', delim, {
         virt_text = line:get(),
@@ -193,7 +194,8 @@ function Render:border(node, thin)
         return
     end
     local block = self.config.width == 'block'
-    local width = block and self.data.body - node.start_col or vim.o.columns
+    local max_width = self.context.config.max_width
+    local width = block and self.data.body - node.start_col or env.win.width(self.context.win, max_width)
     self.marks:start(self.config, 'code_border', node, {
         virt_text = { { icon:rep(width), highlight } },
         virt_text_pos = 'overlay',
@@ -219,7 +221,9 @@ function Render:background(start_row, end_row)
     local padding = self:line()
     local win_col = 0
     if self.config.width == 'block' then
-        padding:pad(vim.o.columns * 2)
+        local max_width = self.context.config.max_width
+        local effective_width = env.win.width(self.context.win, max_width)
+        padding:pad(effective_width * 2)
         win_col = self.data.margin + self.data.body + self:indent():size()
     end
     local col = self.node.start_col

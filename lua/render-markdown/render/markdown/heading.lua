@@ -221,7 +221,9 @@ function Render:background(box)
     local padding = self:line()
     local win_col = 0
     if self.data.width == 'block' then
-        padding:pad(vim.o.columns * 2)
+        local max_width = self.context.config.max_width
+        local effective_width = env.win.width(self.context.win, max_width)
+        padding:pad(effective_width * 2)
         win_col = box.margin + box.body + self:indent():size(self.data.level)
     end
     local col = self.node.start_col
@@ -270,7 +272,8 @@ function Render:border(box, above)
     local fg = self.data.fg
     local bg = self.data.bg and colors.bg_as_fg(self.data.bg)
     local prefix = self.config.border_prefix and self.data.level or 0
-    local width = self.data.width == 'block' and box.body or vim.o.columns
+    local max_width = self.context.config.max_width
+    local width = self.data.width == 'block' and box.body or env.win.width(self.context.win, max_width)
     local icon = above and self.config.above or self.config.below
 
     local line = self:line():pad(box.margin)
