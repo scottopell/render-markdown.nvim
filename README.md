@@ -214,9 +214,13 @@ require('render-markdown').setup({
     -- Maximum width of rendered markdown content in columns.
     -- If 0 (default), content uses full window width. If set to a positive integer,
     -- all rendered elements will be limited to that column count for improved readability.
+    -- When set, also enables soft text wrapping (wrap, linebreak, breakindent) so that
+    -- long lines wrap at word boundaries instead of extending beyond max_width.
     max_width = 0,
     -- Automatically center content when max_width is set and window is wider than max_width.
-    -- When enabled, content is horizontally centered within the window for a book-like reading experience.
+    -- When enabled, content is horizontally centered within the window for a book-like
+    -- reading experience. Works with text wrapping so that wrapped lines are also shifted
+    -- to maintain the centered appearance.
     center_max_width = false,
     -- Takes buffer as input, if it returns true this plugin will not attach to the buffer.
     ignore = function()

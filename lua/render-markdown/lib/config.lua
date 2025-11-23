@@ -57,6 +57,26 @@ function Config.new(root, enabled, buf, custom)
     extend(custom)
 
     local self = setmetatable(config, Config)
+
+    -- Add dynamic window options for max_width text wrapping
+    if config.max_width and config.max_width > 0 then
+        -- Store user's default settings for these options
+        self.win_options = vim.tbl_deep_extend('force', self.win_options, {
+            wrap = {
+                default = vim.o.wrap,
+                rendered = true,
+            },
+            linebreak = {
+                default = vim.o.linebreak,
+                rendered = true,
+            },
+            breakindent = {
+                default = vim.o.breakindent,
+                rendered = true,
+            },
+        })
+    end
+
     self.resolved = Resolved.new(config)
     ---@cast self -render.md.partial.Config
     return self

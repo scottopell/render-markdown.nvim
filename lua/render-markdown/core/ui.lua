@@ -109,6 +109,16 @@ function Updater:run()
         for name, value in pairs(self.config.win_options) do
             env.win.set(win, name, value[next_state])
         end
+        -- Add dynamic breakindentopt when max_width with centering is enabled
+        if render and self.config.max_width and self.config.max_width > 0 and self.config.center_max_width then
+            local center_offset = env.win.center_offset(win, self.config.max_width, self.config.center_max_width)
+            if center_offset > 0 then
+                env.win.set(win, 'breakindentopt', 'shift:' .. center_offset)
+            end
+        elseif not render then
+            -- Restore default breakindentopt when not rendering
+            env.win.set(win, 'breakindentopt', vim.o.breakindentopt)
+        end
     end
     if not render then
         self:clear()
