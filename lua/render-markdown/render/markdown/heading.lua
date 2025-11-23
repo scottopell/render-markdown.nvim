@@ -199,12 +199,12 @@ function Render:box(marker_width)
     else
         width = width + vim.fn.max(self.node:widths())
     end
-    local max_width = self.context.config.max_width
-    local left = env.win.percent(self.context.win, self.data.left_pad, width, max_width)
-    local right = env.win.percent(self.context.win, self.data.right_pad, width, max_width)
+    local reader_width = self.context.config.reader_width
+    local left = env.win.percent(self.context.win, self.data.left_pad, width, reader_width)
+    local right = env.win.percent(self.context.win, self.data.right_pad, width, reader_width)
     local body = math.max(left + width + right, self.data.min_width)
-    local center_offset = env.win.center_offset(self.context.win, max_width, self.context.config.center_max_width)
-    local user_margin = env.win.percent(self.context.win, self.data.left_margin, body, max_width)
+    local center_offset = env.win.center_offset(self.context.win, reader_width, self.context.config.center_reader_width)
+    local user_margin = env.win.percent(self.context.win, self.data.left_margin, body, reader_width)
     ---@type render.md.heading.Box
     return {
         padding = left,
@@ -223,8 +223,8 @@ function Render:background(box)
     local padding = self:line()
     local win_col = 0
     if self.data.width == 'block' then
-        local max_width = self.context.config.max_width
-        local effective_width = env.win.width(self.context.win, max_width)
+        local reader_width = self.context.config.reader_width
+        local effective_width = env.win.width(self.context.win, reader_width)
         padding:pad(effective_width * 2)
         win_col = box.margin + box.body + self:indent():size(self.data.level)
     end
@@ -274,8 +274,8 @@ function Render:border(box, above)
     local fg = self.data.fg
     local bg = self.data.bg and colors.bg_as_fg(self.data.bg)
     local prefix = self.config.border_prefix and self.data.level or 0
-    local max_width = self.context.config.max_width
-    local width = self.data.width == 'block' and box.body or env.win.width(self.context.win, max_width)
+    local reader_width = self.context.config.reader_width
+    local width = self.data.width == 'block' and box.body or env.win.width(self.context.win, reader_width)
     local icon = above and self.config.above or self.config.below
 
     local line = self:line():pad(box.margin)

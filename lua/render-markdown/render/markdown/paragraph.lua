@@ -42,12 +42,12 @@ end
 function Render:run()
     local widths = self.node:widths()
     local width = math.max(vim.fn.max(widths), self.config.min_width)
-    local max_width = self.context.config.max_width
-    local center_offset = env.win.center_offset(self.context.win, max_width, self.context.config.center_max_width)
-    local user_margin = env.win.percent(self.context.win, self.data.margin, width, max_width)
+    local reader_width = self.context.config.reader_width
+    local center_offset = env.win.center_offset(self.context.win, reader_width, self.context.config.center_reader_width)
+    local user_margin = env.win.percent(self.context.win, self.data.margin, width, reader_width)
     local margin = center_offset + user_margin
     self:padding(self.node.start_row, self.node.end_row - 1, margin)
-    local indent = env.win.percent(self.context.win, self.data.indent, width, max_width)
+    local indent = env.win.percent(self.context.win, self.data.indent, width, reader_width)
     self:padding(self.node.start_row, self.node.start_row, indent)
 end
 

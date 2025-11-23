@@ -18,8 +18,7 @@ function Config.new(root, enabled, buf, custom)
     local config = {
         enabled = enabled,
         render_modes = root.render_modes,
-        max_width = root.max_width,
-        center_max_width = root.center_max_width,
+        reader_width = root.reader_width,
         debounce = root.debounce,
         anti_conceal = root.anti_conceal,
         bullet = root.bullet,
@@ -58,8 +57,8 @@ function Config.new(root, enabled, buf, custom)
 
     local self = setmetatable(config, Config)
 
-    -- Add dynamic window options for max_width text wrapping
-    if config.max_width and config.max_width > 0 then
+    -- Add dynamic window options for reader_width text wrapping
+    if config.reader_width and config.reader_width > 0 then
         -- Store user's default settings for these options
         self.win_options = vim.tbl_deep_extend('force', self.win_options, {
             wrap = {

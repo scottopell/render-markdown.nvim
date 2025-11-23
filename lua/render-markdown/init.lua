@@ -10,8 +10,7 @@ local M = {}
 ---@field render_in_diff boolean
 ---@field file_types string[]
 ---@field max_file_size number
----@field max_width integer
----@field center_max_width boolean
+---@field reader_width integer
 ---@field ignore fun(buf: integer): boolean
 ---@field nested boolean
 ---@field change_events string[]
@@ -24,8 +23,7 @@ local M = {}
 ---@field custom_handlers table<string, render.md.Handler>
 
 ---@class (exact) render.md.partial.Config: render.md.base.Config
----@field max_width integer
----@field center_max_width boolean
+---@field reader_width integer
 ---@field debounce integer
 ---@field anti_conceal render.md.anti.conceal.Config
 ---@field bullet render.md.bullet.Config
@@ -83,14 +81,12 @@ M.default = {
     -- Maximum file size (in MB) that this plugin will attempt to render.
     -- File larger than this will effectively be ignored.
     max_file_size = 10.0,
-    -- Maximum width of rendered markdown content in columns.
+    -- Constrain width and center content for a book-like reading experience.
     -- If 0 (default), content uses full window width. If set to a positive integer,
-    -- content will be limited to that column count. Useful for a more readable experience
-    -- with shorter line lengths regardless of window size.
-    max_width = 0,
-    -- Automatically center content when max_width is set and window is wider than max_width.
-    -- When enabled, content is horizontally centered within the window.
-    center_max_width = false,
+    -- content will be constrained to that column count and horizontally centered.
+    -- Enables soft text wrapping (wrap, linebreak, breakindent) so long lines wrap
+    -- at word boundaries within the reader width.
+    reader_width = 0,
     -- Takes buffer as input, if it returns true this plugin will not attach to the buffer.
     ignore = function()
         return false

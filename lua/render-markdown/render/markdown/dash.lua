@@ -19,8 +19,8 @@ function Render:setup()
         return false
     end
     local width = self:get_width(self.config.width, 0)
-    local max_width = self.context.config.max_width
-    local center_offset = env.win.center_offset(self.context.win, max_width, self.context.config.center_max_width)
+    local reader_width = self.context.config.reader_width
+    local center_offset = env.win.center_offset(self.context.win, reader_width, self.context.config.center_reader_width)
     local user_margin = self:get_width(self.config.left_margin, width)
     local margin = center_offset + user_margin
     if width <= 0 then
@@ -35,13 +35,13 @@ end
 ---@param used integer
 ---@return integer
 function Render:get_width(width, used)
-    local max_width = self.context.config.max_width
+    local reader_width = self.context.config.reader_width
     if type(width) == 'number' then
-        return env.win.percent(self.context.win, width, used, max_width)
+        return env.win.percent(self.context.win, width, used, reader_width)
     elseif type(width) == 'function' then
-        return width({ width = env.win.width(self.context.win, max_width) })
+        return width({ width = env.win.width(self.context.win, reader_width) })
     else
-        return env.win.width(self.context.win, max_width)
+        return env.win.width(self.context.win, reader_width)
     end
 end
 
