@@ -32,12 +32,13 @@ end
 ---@param used integer
 ---@return integer
 function Render:get_width(width, used)
+    local max_width = self.context.config.max_width
     if type(width) == 'number' then
-        return env.win.percent(self.context.win, width, used)
+        return env.win.percent(self.context.win, width, used, max_width)
     elseif type(width) == 'function' then
-        return width({ width = env.win.width(self.context.win) })
+        return width({ width = env.win.width(self.context.win, max_width) })
     else
-        return vim.o.columns
+        return env.win.width(self.context.win, max_width)
     end
 end
 

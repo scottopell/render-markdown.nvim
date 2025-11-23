@@ -199,14 +199,15 @@ function Render:box(marker_width)
     else
         width = width + vim.fn.max(self.node:widths())
     end
-    local left = env.win.percent(self.context.win, self.data.left_pad, width)
-    local right = env.win.percent(self.context.win, self.data.right_pad, width)
+    local max_width = self.context.config.max_width
+    local left = env.win.percent(self.context.win, self.data.left_pad, width, max_width)
+    local right = env.win.percent(self.context.win, self.data.right_pad, width, max_width)
     local body = math.max(left + width + right, self.data.min_width)
     ---@type render.md.heading.Box
     return {
         padding = left,
         body = body,
-        margin = env.win.percent(self.context.win, self.data.left_margin, body),
+        margin = env.win.percent(self.context.win, self.data.left_margin, body, max_width),
     }
 end
 

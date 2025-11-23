@@ -6,6 +6,7 @@
 ---@field log_runtime? boolean
 ---@field file_types? string[]
 ---@field max_file_size? number
+---@field max_width? integer
 ---@field ignore? fun(buf: integer): boolean
 ---@field nested? boolean
 ---@field change_events? string[]
@@ -18,6 +19,7 @@
 ---@field custom_handlers? table<string, render.md.Handler>
 
 ---@class (exact) render.md.partial.UserConfig: render.md.base.UserConfig
+---@field max_width? integer
 ---@field debounce? integer
 ---@field anti_conceal? render.md.anti.conceal.UserConfig
 ---@field bullet? render.md.bullet.UserConfig

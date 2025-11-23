@@ -255,24 +255,30 @@ function M.win.view(win)
 end
 
 ---@param win integer
+---@param max_width? integer
 ---@return integer
-function M.win.width(win)
+function M.win.width(win, max_width)
     local infos = vim.fn.getwininfo(win)
     local textoff = #infos == 1 and infos[1].textoff or 0
-    return vim.api.nvim_win_get_width(win) - textoff
+    local window_width = vim.api.nvim_win_get_width(win) - textoff
+    if max_width and max_width > 0 then
+        return math.min(window_width, max_width)
+    end
+    return window_width
 end
 
 ---@param win integer
 ---@param value number
 ---@param used integer
+---@param max_width? integer
 ---@return integer
-function M.win.percent(win, value, used)
+function M.win.percent(win, value, used, max_width)
     if value <= 0 then
         return 0
     elseif value >= 1 then
         return value
     else
-        local width = M.win.width(win) - used
+        local width = M.win.width(win, max_width) - used
         return math.floor((width * value) + 0.5)
     end
 end
