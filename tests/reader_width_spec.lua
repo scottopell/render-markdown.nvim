@@ -41,7 +41,7 @@ describe('reader_width', function()
         assert.equals(true, breakindent, 'breakindent should be true')
     end)
 
-    it('reader_width with center_reader_width', function()
+    it('reader_width automatically centers', function()
         -- Set window width to 140 columns
         vim.opt.columns = 140
 
@@ -53,7 +53,6 @@ describe('reader_width', function()
 
         util.setup.text(lines, {
             reader_width = 80,
-            center_reader_width = true,
             paragraph = { enabled = false },
         })
 
@@ -65,7 +64,6 @@ describe('reader_width', function()
         local buf = vim.api.nvim_get_current_buf()
         local config = state.get(buf)
         assert.equals(80, config.reader_width)
-        assert.equals(true, config.center_reader_width)
 
         -- Check that window options are set
         local win = vim.api.nvim_get_current_win()
