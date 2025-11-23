@@ -41,7 +41,7 @@ function Render:setup()
     body = math.max(body, left + width + right, self.config.min_width)
 
     local reader_width = self.context.config.reader_width
-    local center_offset = env.win.center_offset(self.context.win, reader_width, self.context.config.center_reader_width)
+    local center_offset = env.win.center_offset(self.context.win, reader_width)
     local user_margin = self:offset(self.config.left_margin, body)
 
     self.data = {

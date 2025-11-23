@@ -203,7 +203,7 @@ function Render:box(marker_width)
     local left = env.win.percent(self.context.win, self.data.left_pad, width, reader_width)
     local right = env.win.percent(self.context.win, self.data.right_pad, width, reader_width)
     local body = math.max(left + width + right, self.data.min_width)
-    local center_offset = env.win.center_offset(self.context.win, reader_width, self.context.config.center_reader_width)
+    local center_offset = env.win.center_offset(self.context.win, reader_width)
     local user_margin = env.win.percent(self.context.win, self.data.left_margin, body, reader_width)
     ---@type render.md.heading.Box
     return {
