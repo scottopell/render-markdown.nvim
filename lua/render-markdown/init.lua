@@ -7,6 +7,7 @@ local M = {}
 ---@field preset render.md.config.Preset
 ---@field log_level render.md.log.Level
 ---@field log_runtime boolean
+---@field render_in_diff boolean
 ---@field file_types string[]
 ---@field max_file_size number
 ---@field ignore fun(buf: integer): boolean
@@ -70,6 +71,9 @@ M.default = {
     -- Print runtime of main update method.
     -- Only intended to be used for plugin development / debugging.
     log_runtime = false,
+    -- Whether markdown should be rendered in diff mode (e.g., in diffview.nvim).
+    -- When set to true, markdown rendering will work in side-by-side diff views.
+    render_in_diff = false,
     -- Filetypes this plugin will run on.
     file_types = { 'markdown' },
     -- Maximum file size (in MB) that this plugin will attempt to render.
