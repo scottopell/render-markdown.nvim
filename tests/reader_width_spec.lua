@@ -15,9 +15,6 @@ describe('reader_width', function()
             paragraph = { enabled = false },
         })
 
-        -- Wait for rendering to complete
-        vim.wait(100)
-
         -- Get config to verify reader_width is set
         local state = require('render-markdown.state')
         local buf = vim.api.nvim_get_current_buf()
@@ -55,9 +52,6 @@ describe('reader_width', function()
             reader_width = 80,
             paragraph = { enabled = false },
         })
-
-        -- Wait for rendering to complete
-        vim.wait(100)
 
         -- Get config to verify settings
         local state = require('render-markdown.state')
