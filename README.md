@@ -211,6 +211,10 @@ require('render-markdown').setup({
     -- Maximum file size (in MB) that this plugin will attempt to render.
     -- File larger than this will effectively be ignored.
     max_file_size = 10.0,
+    -- Maximum width of rendered markdown content in columns.
+    -- If 0 (default), content uses full window width. If set to a positive integer,
+    -- all rendered elements will be limited to that column count for improved readability.
+    max_width = 0,
     -- Takes buffer as input, if it returns true this plugin will not attach to the buffer.
     ignore = function()
         return false
