@@ -268,6 +268,23 @@ function M.win.width(win, max_width)
 end
 
 ---@param win integer
+---@param max_width integer
+---@param center boolean
+---@return integer
+function M.win.center_offset(win, max_width, center)
+    if not center or max_width <= 0 then
+        return 0
+    end
+    local infos = vim.fn.getwininfo(win)
+    local textoff = #infos == 1 and infos[1].textoff or 0
+    local window_width = vim.api.nvim_win_get_width(win) - textoff
+    if window_width > max_width then
+        return math.floor((window_width - max_width) / 2)
+    end
+    return 0
+end
+
+---@param win integer
 ---@param value number
 ---@param used integer
 ---@param max_width? integer

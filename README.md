@@ -215,6 +215,9 @@ require('render-markdown').setup({
     -- If 0 (default), content uses full window width. If set to a positive integer,
     -- all rendered elements will be limited to that column count for improved readability.
     max_width = 0,
+    -- Automatically center content when max_width is set and window is wider than max_width.
+    -- When enabled, content is horizontally centered within the window for a book-like reading experience.
+    center_max_width = false,
     -- Takes buffer as input, if it returns true this plugin will not attach to the buffer.
     ignore = function()
         return false

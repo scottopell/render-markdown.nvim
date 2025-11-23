@@ -19,7 +19,10 @@ function Render:setup()
         return false
     end
     local width = self:get_width(self.config.width, 0)
-    local margin = self:get_width(self.config.left_margin, width)
+    local max_width = self.context.config.max_width
+    local center_offset = env.win.center_offset(self.context.win, max_width, self.context.config.center_max_width)
+    local user_margin = self:get_width(self.config.left_margin, width)
+    local margin = center_offset + user_margin
     if width <= 0 then
         return false
     end

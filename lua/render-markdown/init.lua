@@ -11,6 +11,7 @@ local M = {}
 ---@field file_types string[]
 ---@field max_file_size number
 ---@field max_width integer
+---@field center_max_width boolean
 ---@field ignore fun(buf: integer): boolean
 ---@field nested boolean
 ---@field change_events string[]
@@ -24,6 +25,7 @@ local M = {}
 
 ---@class (exact) render.md.partial.Config: render.md.base.Config
 ---@field max_width integer
+---@field center_max_width boolean
 ---@field debounce integer
 ---@field anti_conceal render.md.anti.conceal.Config
 ---@field bullet render.md.bullet.Config
@@ -86,6 +88,9 @@ M.default = {
     -- content will be limited to that column count. Useful for a more readable experience
     -- with shorter line lengths regardless of window size.
     max_width = 0,
+    -- Automatically center content when max_width is set and window is wider than max_width.
+    -- When enabled, content is horizontally centered within the window.
+    center_max_width = false,
     -- Takes buffer as input, if it returns true this plugin will not attach to the buffer.
     ignore = function()
         return false

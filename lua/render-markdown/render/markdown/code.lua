@@ -40,11 +40,15 @@ function Render:setup()
         + widths[1]
     body = math.max(body, left + width + right, self.config.min_width)
 
+    local max_width = self.context.config.max_width
+    local center_offset = env.win.center_offset(self.context.win, max_width, self.context.config.center_max_width)
+    local user_margin = self:offset(self.config.left_margin, body)
+
     self.data = {
         language = language,
         padding = left,
         body = body,
-        margin = self:offset(self.config.left_margin, body),
+        margin = center_offset + user_margin,
     }
     return true
 end

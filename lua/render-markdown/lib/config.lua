@@ -19,6 +19,7 @@ function Config.new(root, enabled, buf, custom)
         enabled = enabled,
         render_modes = root.render_modes,
         max_width = root.max_width,
+        center_max_width = root.center_max_width,
         debounce = root.debounce,
         anti_conceal = root.anti_conceal,
         bullet = root.bullet,
