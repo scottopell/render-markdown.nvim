@@ -34,6 +34,44 @@ function M.get(buf)
     return result
 end
 
+---Manages window options (wrap, linebreak, breakindent) for reader_width feature
+---Decoupled from render state to keep wrapping enabled in insert mode (REQ-RW-003)
+---@param buf integer
+---@param config render.md.buf.Config
+function M.apply_window_options(buf, config)
+    local reader_width = config.reader_width or 0
+
+    if reader_width > 0 then
+        -- Capture global defaults on first enable (REQ-RW-006)
+        if not state.window_options[buf] then
+            state.window_options[buf] = {
+                captured = true,
+                wrap = vim.o.wrap,
+                linebreak = vim.o.linebreak,
+                breakindent = vim.o.breakindent,
+            }
+        end
+
+        -- Apply reader_width window options to all windows (REQ-RW-003)
+        for _, win in ipairs(env.buf.wins(buf)) do
+            env.win.set(win, 'wrap', true)
+            env.win.set(win, 'linebreak', true)
+            env.win.set(win, 'breakindent', true)
+        end
+    elseif state.window_options[buf] and state.window_options[buf].captured then
+        -- Restore original values when reader_width disabled (REQ-RW-006)
+        local original = state.window_options[buf]
+        for _, win in ipairs(env.buf.wins(buf)) do
+            env.win.set(win, 'wrap', original.wrap)
+            env.win.set(win, 'linebreak', original.linebreak)
+            env.win.set(win, 'breakindent', original.breakindent)
+        end
+
+        -- Clear captured state
+        state.window_options[buf] = nil
+    end
+end
+
 ---@param buf integer
 ---@param win integer
 ---@param event string
@@ -98,6 +136,10 @@ function Updater:run()
         return
     end
     self.mode = env.mode.get() -- mode is only available after this point
+
+    -- Apply reader_width window options (wrap, linebreak, breakindent) independent of render state
+    M.apply_window_options(self.buf, self.config)
+
     local in_diff = env.win.get(self.win, 'diff')
     local render = self.config.enabled
         and self.config.resolved:render(self.mode)
@@ -106,17 +148,22 @@ function Updater:run()
     log.buf('info', 'Render', self.buf, render)
     local next_state = render and 'rendered' or 'default'
     for _, win in ipairs(env.buf.wins(self.buf)) do
+        -- Apply non-reader_width window options based on render state
         for name, value in pairs(self.config.win_options) do
-            env.win.set(win, name, value[next_state])
+            -- Skip wrap, linebreak, breakindent as they're handled by apply_window_options
+            if name ~= 'wrap' and name ~= 'linebreak' and name ~= 'breakindent' then
+                env.win.set(win, name, value[next_state])
+            end
         end
         -- Add dynamic breakindentopt when reader_width is enabled (REQ-RW-002, REQ-RW-003)
-        if render and self.config.reader_width and self.config.reader_width > 0 then
+        -- This is independent of render state to keep wrapped lines aligned in insert mode
+        if self.config.reader_width and self.config.reader_width > 0 then
             local center_offset = env.win.center_offset(win, self.config.reader_width)
             if center_offset > 0 then
                 env.win.set(win, 'breakindentopt', 'shift:' .. center_offset)
             end
-        elseif not render then
-            -- Restore default breakindentopt when not rendering (REQ-RW-006)
+        else
+            -- Restore default breakindentopt when reader_width disabled (REQ-RW-006)
             env.win.set(win, 'breakindentopt', vim.o.breakindentopt)
         end
     end

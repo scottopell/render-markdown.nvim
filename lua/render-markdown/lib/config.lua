@@ -57,24 +57,8 @@ function Config.new(root, enabled, buf, custom)
 
     local self = setmetatable(config, Config)
 
-    -- Add dynamic window options for reader_width text wrapping
-    if config.reader_width and config.reader_width > 0 then
-        -- Store user's default settings for these options
-        self.win_options = vim.tbl_deep_extend('force', self.win_options, {
-            wrap = {
-                default = vim.o.wrap,
-                rendered = true,
-            },
-            linebreak = {
-                default = vim.o.linebreak,
-                rendered = true,
-            },
-            breakindent = {
-                default = vim.o.breakindent,
-                rendered = true,
-            },
-        })
-    end
+    -- Note: wrap, linebreak, breakindent window options for reader_width are now
+    -- managed by M.apply_window_options in core/ui.lua, independent of render state
 
     self.resolved = Resolved.new(config)
     ---@cast self -render.md.partial.Config
