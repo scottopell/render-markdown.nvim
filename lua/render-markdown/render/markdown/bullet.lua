@@ -1,4 +1,5 @@
 local Base = require('render-markdown.render.base')
+local env = require('render-markdown.lib.env')
 local list = require('render-markdown.lib.list')
 local str = require('render-markdown.lib.str')
 
@@ -89,6 +90,18 @@ function Render:marker()
     if not icon or not highlight then
         return
     end
+
+    -- Check if reader_width centering is active
+    local reader_width = self.context.config.reader_width
+    local center_offset = env.win.center_offset(self.context.win, reader_width)
+
+    -- When centering is active, markers are handled by paragraph wrapping
+    -- Skip marker rendering to avoid duplicates
+    if center_offset > 0 then
+        return
+    end
+
+    -- No centering: use normal overlay behavior
     -- https://github.com/tree-sitter-grammars/tree-sitter-markdown/issues/127
     local node = self.data.marker
     local text = str.pad(str.spaces('start', node.text)) .. icon

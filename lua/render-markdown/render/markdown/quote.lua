@@ -2,6 +2,7 @@ local Base = require('render-markdown.render.base')
 local list = require('render-markdown.lib.list')
 local str = require('render-markdown.lib.str')
 local ts = require('render-markdown.core.ts')
+local env = require('render-markdown.lib.env')
 
 ---@class render.md.quote.Data
 ---@field callout? render.md.request.callout.Value
@@ -113,6 +114,17 @@ function Render:marker(node, index)
     if not range then
         return
     end
+    -- Calculate center offset for reader_width centering
+    local reader_width = self.context.config.reader_width
+    local center_offset = env.win.center_offset(self.context.win, reader_width)
+
+    -- When centering is active, markers are handled by paragraph wrapping
+    -- Skip marker rendering to avoid duplicates
+    if center_offset > 0 then
+        return
+    end
+
+    -- No centering: use normal overlay behavior
     self.marks:add(self.config, 'quote', range[1], range[2], {
         end_row = range[3],
         end_col = range[4],

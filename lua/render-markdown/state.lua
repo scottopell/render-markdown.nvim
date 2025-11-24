@@ -23,6 +23,16 @@ local M = {}
 ---@type table<integer, render.md.buf.Config>
 M.cache = {}
 
+---@class render.md.WindowOptions
+---@field captured boolean
+---@field wrap boolean
+---@field linebreak boolean
+---@field breakindent boolean
+
+---@private
+---@type table<integer, render.md.WindowOptions>
+M.window_options = {}
+
 ---called from init on setup
 ---@param config render.md.Config
 function M.setup(config)
@@ -45,6 +55,7 @@ function M.setup(config)
 
     -- reset cache
     M.cache = {}
+    M.window_options = {}
 
     require('render-markdown.core.ts').setup()
     require('render-markdown.core.ui').setup()

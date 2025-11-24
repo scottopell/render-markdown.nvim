@@ -40,11 +40,15 @@ function Render:setup()
         + widths[1]
     body = math.max(body, left + width + right, self.config.min_width)
 
+    local reader_width = self.context.config.reader_width
+    local center_offset = env.win.center_offset(self.context.win, reader_width)
+    local user_margin = self:offset(self.config.left_margin, body)
+
     self.data = {
         language = language,
         padding = left,
         body = body,
-        margin = self:offset(self.config.left_margin, body),
+        margin = center_offset + user_margin,
     }
     return true
 end
@@ -57,7 +61,8 @@ function Render:offset(value, used)
     if value <= 0 then
         return 0
     end
-    local result = env.win.percent(self.context.win, value, used)
+    local reader_width = self.context.config.reader_width
+    local result = env.win.percent(self.context.win, value, used, reader_width)
     if self.node.text:find('\t') then
         -- round to the next multiple of tab
         local tab = env.buf.get(self.context.buf, 'tabstop')
@@ -162,7 +167,8 @@ function Render:language(info, language, delim)
 
     local line = prefix:extend(body)
     if self.config.width == 'full' then
-        line:rep(border, vim.o.columns, border_hl)
+        local reader_width = self.context.config.reader_width
+        line:rep(border, env.win.width(self.context.win, reader_width), border_hl)
     end
     return self.marks:start(self.config, 'code_language', delim, {
         virt_text = line:get(),
@@ -192,7 +198,8 @@ function Render:border(node, thin)
         return
     end
     local block = self.config.width == 'block'
-    local width = block and self.data.body - node.start_col or vim.o.columns
+    local reader_width = self.context.config.reader_width
+    local width = block and self.data.body - node.start_col or env.win.width(self.context.win, reader_width)
     self.marks:start(self.config, 'code_border', node, {
         virt_text = { { icon:rep(width), highlight } },
         virt_text_pos = 'overlay',
@@ -218,7 +225,9 @@ function Render:background(start_row, end_row)
     local padding = self:line()
     local win_col = 0
     if self.config.width == 'block' then
-        padding:pad(vim.o.columns * 2)
+        local reader_width = self.context.config.reader_width
+        local effective_width = env.win.width(self.context.win, reader_width)
+        padding:pad(effective_width * 2)
         win_col = self.data.margin + self.data.body + self:indent():size()
     end
     local col = self.node.start_col

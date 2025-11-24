@@ -53,6 +53,12 @@ function M.setup.text(lines, opts)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].filetype = 'markdown'
     vim.wait(0)
+    -- Explicitly trigger UI update as FileType autocmd may not fire in headless mode
+    local ui = require('render-markdown.core.ui')
+    local win = vim.api.nvim_get_current_win()
+    ui.update(buf, win, 'test_setup', true)
+    -- Wait for debounced update to complete (default debounce is 100ms)
+    vim.wait(150)
 end
 
 M.row = require('tests.helpers.row').new

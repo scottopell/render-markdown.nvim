@@ -18,6 +18,7 @@ function Config.new(root, enabled, buf, custom)
     local config = {
         enabled = enabled,
         render_modes = root.render_modes,
+        reader_width = root.reader_width,
         debounce = root.debounce,
         anti_conceal = root.anti_conceal,
         bullet = root.bullet,
@@ -55,6 +56,10 @@ function Config.new(root, enabled, buf, custom)
     extend(custom)
 
     local self = setmetatable(config, Config)
+
+    -- Note: wrap, linebreak, breakindent window options for reader_width are now
+    -- managed by M.apply_window_options in core/ui.lua, independent of render state
+
     self.resolved = Resolved.new(config)
     ---@cast self -render.md.partial.Config
     return self

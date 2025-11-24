@@ -255,24 +255,46 @@ function M.win.view(win)
 end
 
 ---@param win integer
+---@param reader_width? integer
 ---@return integer
-function M.win.width(win)
+function M.win.width(win, reader_width)
     local infos = vim.fn.getwininfo(win)
     local textoff = #infos == 1 and infos[1].textoff or 0
-    return vim.api.nvim_win_get_width(win) - textoff
+    local window_width = vim.api.nvim_win_get_width(win) - textoff
+    if reader_width and reader_width > 0 then
+        return math.min(window_width, reader_width)
+    end
+    return window_width
+end
+
+---@param win integer
+---@param reader_width integer
+---@return integer
+function M.win.center_offset(win, reader_width)
+    if reader_width <= 0 then
+        return 0
+    end
+    local infos = vim.fn.getwininfo(win)
+    local textoff = #infos == 1 and infos[1].textoff or 0
+    local window_width = vim.api.nvim_win_get_width(win) - textoff
+    if window_width > reader_width then
+        return math.floor((window_width - reader_width) / 2)
+    end
+    return 0
 end
 
 ---@param win integer
 ---@param value number
 ---@param used integer
+---@param reader_width? integer
 ---@return integer
-function M.win.percent(win, value, used)
+function M.win.percent(win, value, used, reader_width)
     if value <= 0 then
         return 0
     elseif value >= 1 then
         return value
     else
-        local width = M.win.width(win) - used
+        local width = M.win.width(win, reader_width) - used
         return math.floor((width * value) + 0.5)
     end
 end
