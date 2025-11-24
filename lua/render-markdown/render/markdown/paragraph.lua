@@ -1,6 +1,33 @@
 local Base = require('render-markdown.render.base')
 local env = require('render-markdown.lib.env')
 
+---Wraps text at specified width using word boundaries
+---@param text string Text to wrap
+---@param width number Maximum width per line
+---@return string[] Wrapped lines
+local function wrap_text(text, width)
+    local lines = {}
+    local current = ''
+
+    for word in text:gmatch('%S+') do
+        local test_line = current == '' and word or (current .. ' ' .. word)
+        if #test_line <= width then
+            current = test_line
+        else
+            if current ~= '' then
+                table.insert(lines, current)
+            end
+            current = word
+        end
+    end
+
+    if current ~= '' then
+        table.insert(lines, current)
+    end
+
+    return lines
+end
+
 ---@class render.md.paragraph.Data
 ---@field margin number
 ---@field indent number
@@ -49,6 +76,20 @@ function Render:run()
     local center_offset = env.win.center_offset(self.context.win, reader_width)
     local user_margin = env.win.percent(self.context.win, self.data.margin, width, reader_width)
     local margin = center_offset + user_margin
+
+    -- Check if we need to wrap text at reader_width boundary (REQ-RW-003)
+    if reader_width and reader_width > 0 then
+        local text = self.node.text:gsub('\n', ' ') -- Join multi-line paragraphs
+        local text_width = vim.fn.strdisplaywidth(text)
+
+        -- Only apply wrapping if text exceeds reader_width
+        if text_width > reader_width then
+            self:wrap_paragraph(text, reader_width, center_offset)
+            return
+        end
+    end
+
+    -- Default behavior: just add padding without wrapping
     self:padding(self.node.start_row, self.node.end_row - 1, margin)
     local indent = env.win.percent(self.context.win, self.data.indent, width, reader_width)
     self:padding(self.node.start_row, self.node.start_row, indent)
@@ -69,6 +110,43 @@ function Render:padding(start_row, end_row, amount)
             virt_text = line,
             virt_text_pos = 'inline',
         })
+    end
+end
+
+---Wraps paragraph at reader_width boundary using virtual lines + concealment
+---This achieves REQ-RW-003: text wrapping at reader_width instead of window edge
+---@private
+---@param text string Full paragraph text
+---@param reader_width number Maximum width before wrapping
+---@param center_offset number Left padding for centering
+function Render:wrap_paragraph(text, reader_width, center_offset)
+    -- Wrap text at reader_width boundary
+    local wrapped_lines = wrap_text(text, reader_width)
+
+    -- Create virtual lines with centering for each wrapped line
+    local virt_lines = {}
+    for _, line_text in ipairs(wrapped_lines) do
+        local centered = string.rep(' ', center_offset) .. line_text
+        table.insert(virt_lines, { { centered, 'Normal' } })
+    end
+
+    -- Add virtual lines above the original paragraph
+    self.marks:add(self.config, false, self.node.start_row, 0, {
+        priority = 100,
+        virt_lines = virt_lines,
+        virt_lines_above = true,
+    })
+
+    -- Conceal all original lines of the paragraph
+    for row = self.node.start_row, self.node.end_row - 1 do
+        local line_content = vim.api.nvim_buf_get_lines(self.context.buf, row, row + 1, false)[1]
+        if line_content then
+            self.marks:add(self.config, false, row, 0, {
+                priority = 100,
+                end_col = #line_content,
+                conceal = '',
+            })
+        end
     end
 end
 

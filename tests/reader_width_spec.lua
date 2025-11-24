@@ -134,19 +134,20 @@ describe('reader_width', function()
         -- Verify config.enabled is now false
         assert.equals(false, config.enabled, 'config should be disabled')
 
-        -- Verify options are restored to the defaults captured at config creation time
+        -- Verify options are restored to the defaults captured at window option capture time
         local restored_wrap = vim.api.nvim_get_option_value('wrap', { win = win })
         local restored_linebreak = vim.api.nvim_get_option_value('linebreak', { win = win })
         local restored_breakindent = vim.api.nvim_get_option_value('breakindent', { win = win })
 
-        -- The config captures defaults at creation time from global vim.o.*
-        local expected_wrap = config.win_options.wrap.default
-        local expected_linebreak = config.win_options.linebreak.default
-        local expected_breakindent = config.win_options.breakindent.default
+        -- In Architecture 2, window options are captured in state.window_options, not config
+        -- The defaults are captured from global vim.o.* on first enable
+        local expected_wrap = default_wrap
+        local expected_linebreak = default_linebreak
+        local expected_breakindent = default_breakindent
 
-        assert.equals(expected_wrap, restored_wrap, 'wrap should be restored to config default')
-        assert.equals(expected_linebreak, restored_linebreak, 'linebreak should be restored to config default')
-        assert.equals(expected_breakindent, restored_breakindent, 'breakindent should be restored to config default')
+        assert.equals(expected_wrap, restored_wrap, 'wrap should be restored to captured default')
+        assert.equals(expected_linebreak, restored_linebreak, 'linebreak should be restored to captured default')
+        assert.equals(expected_breakindent, restored_breakindent, 'breakindent should be restored to captured default')
 
         -- Verify linebreak and breakindent are no longer forced to true
         assert.equals(false, restored_linebreak, 'linebreak should not be true after disable')

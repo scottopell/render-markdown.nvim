@@ -40,8 +40,10 @@ end
 ---@param config render.md.buf.Config
 function M.apply_window_options(buf, config)
     local reader_width = config.reader_width or 0
+    local enabled = config.enabled
 
-    if reader_width > 0 then
+    -- Only apply reader_width window options when both enabled and reader_width > 0
+    if enabled and reader_width > 0 then
         -- Capture global defaults on first enable (REQ-RW-006)
         if not state.window_options[buf] then
             state.window_options[buf] = {
@@ -59,7 +61,7 @@ function M.apply_window_options(buf, config)
             env.win.set(win, 'breakindent', true)
         end
     elseif state.window_options[buf] and state.window_options[buf].captured then
-        -- Restore original values when reader_width disabled (REQ-RW-006)
+        -- Restore original values when disabled or reader_width set to 0 (REQ-RW-006)
         local original = state.window_options[buf]
         for _, win in ipairs(env.buf.wins(buf)) do
             env.win.set(win, 'wrap', original.wrap)
