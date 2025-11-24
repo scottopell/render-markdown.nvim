@@ -20,7 +20,10 @@ function Render:setup()
     end
     local margin = self:get_number(self.config.left_margin)
     local indent = self:get_number(self.config.indent)
-    if margin <= 0 and indent <= 0 then
+    local reader_width = self.context.config.reader_width
+    -- When reader_width is enabled, we need to render paragraphs even if margin/indent are 0
+    -- because we need to add center_offset padding for centering (REQ-RW-010)
+    if margin <= 0 and indent <= 0 and (not reader_width or reader_width <= 0) then
         return false
     end
     self.data = { margin = margin, indent = indent }
