@@ -28,7 +28,7 @@ function M.parse(ctx)
 
             (list_item) @list
 
-            (section (paragraph) @paragraph)
+            (paragraph) @paragraph
 
             (block_quote) @quote
 
