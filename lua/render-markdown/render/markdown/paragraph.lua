@@ -82,9 +82,13 @@ function Render:run()
         local text = self.node.text:gsub('\n', ' ') -- Join multi-line paragraphs
         local text_width = vim.fn.strdisplaywidth(text)
 
-        -- Only apply wrapping if text exceeds reader_width
-        if text_width > reader_width then
-            self:wrap_paragraph(text, reader_width, center_offset)
+        -- Calculate marker width adjustment for blockquotes and lists
+        local marker_width = self:calculate_marker_width()
+
+        -- Only apply wrapping if text exceeds available width
+        local effective_width = reader_width - marker_width
+        if text_width > effective_width then
+            self:wrap_paragraph(text, effective_width, center_offset, marker_width)
             return
         end
     end
@@ -93,6 +97,35 @@ function Render:run()
     self:padding(self.node.start_row, self.node.end_row - 1, margin)
     local indent = env.win.percent(self.context.win, self.data.indent, width, reader_width)
     self:padding(self.node.start_row, self.node.start_row, indent)
+end
+
+---Calculates the display width used by list markers and blockquote markers
+---@private
+---@return number Width in characters
+function Render:calculate_marker_width()
+    local width = 0
+
+    -- Check if paragraph is inside a blockquote
+    local in_blockquote = self.node:parent('block_quote')
+    if in_blockquote then
+        -- Blockquote marker (▋) + space typically uses ~2 characters
+        local quote_config = self.context.config.quote
+        if quote_config and quote_config.enabled then
+            width = width + 2
+        end
+    end
+
+    -- Check if paragraph is inside a list item
+    local in_list = self.node:parent('list_item')
+    if in_list then
+        -- List marker (●, ○, etc.) + space typically uses ~2 characters
+        local bullet_config = self.context.config.bullet
+        if bullet_config and bullet_config.enabled then
+            width = width + 2
+        end
+    end
+
+    return width
 end
 
 ---@private
@@ -115,18 +148,22 @@ end
 
 ---Wraps paragraph at reader_width boundary using virtual lines + concealment
 ---This achieves REQ-RW-003: text wrapping at reader_width instead of window edge
+---Accounts for blockquote and list markers when calculating available width
 ---@private
 ---@param text string Full paragraph text
----@param reader_width number Maximum width before wrapping
+---@param effective_width number Maximum width before wrapping (already accounts for markers)
 ---@param center_offset number Left padding for centering
-function Render:wrap_paragraph(text, reader_width, center_offset)
-    -- Wrap text at reader_width boundary
-    local wrapped_lines = wrap_text(text, reader_width)
+---@param marker_width number Width used by blockquote/list markers
+function Render:wrap_paragraph(text, effective_width, center_offset, marker_width)
+    -- Wrap text at effective width (reader_width - marker_width)
+    local wrapped_lines = wrap_text(text, effective_width)
 
-    -- Create virtual lines with centering for each wrapped line
+    -- Create virtual lines with centering and marker offset for each wrapped line
     local virt_lines = {}
     for _, line_text in ipairs(wrapped_lines) do
-        local centered = string.rep(' ', center_offset) .. line_text
+        -- Add center offset + marker width to position text correctly
+        local padding = string.rep(' ', center_offset + marker_width)
+        local centered = padding .. line_text
         table.insert(virt_lines, { { centered, 'Normal' } })
     end
 
