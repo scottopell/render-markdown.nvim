@@ -10,7 +10,7 @@ The feature is non-intrusive with a default of 0 (disabled), ensuring existing u
 
 All prose and code elements (paragraphs, headings, code blocks) should be consistently centered for a unified reading experience. Tables are intentionally exempted to preserve their columnar structure, as wrapping table cells would destroy readability.
 
-Current implementation successfully centers 4 of 6 element types (paragraphs, headings, code blocks, horizontal rules). Lists and blockquotes require additional implementation work to add margin support.
+Current implementation successfully centers 4 of 6 element types (paragraphs, headings, code blocks, horizontal rules). Lists require margin support architecture. Blockquotes have a critical marker positioning bug where the marker renders on the wrong line.
 
 ## Technical Summary
 
@@ -34,7 +34,7 @@ The reader_width feature uses a two-layer centering approach: window-level confi
 | **REQ-RW-002:** Horizontal Centering | ✅ | N/A | ⚠️ Manual | `breakindentopt shift:` + virtual padding. Verified via debug output |
 | **REQ-RW-003:** Text Wrapping | ❌ | N/A | ⚠️ Manual | NOT WORKING: Window options not being applied. Text extends beyond window without wrapping |
 | **REQ-RW-004:** Configuration Interface | ✅ | N/A | ✅ Unit | Config accepted, default 0. Tests in `tests/reader_width_unit_spec.lua` |
-| **REQ-RW-005:** Element Coverage | 🟡 | N/A | ⚠️ Manual | 4 of 6 types centered. Gap: Lists/blockquotes lack margin mechanism |
+| **REQ-RW-005:** Element Coverage | 🟡 | N/A | ⚠️ Manual | 4 of 6 types work. Bugs: List bullets misposition on wrapped items. Blockquote markers render on wrong line |
 | **REQ-RW-006:** Window Option Restoration | ✅ | N/A | ✅ Integration | Restores wrap/linebreak/breakindent. Test: `tests/reader_width_spec.lua:97` |
 | **REQ-RW-007:** Performance Constraint | ✅ | N/A | N/A | O(1) center calculation. No automated perf test needed |
 | **REQ-RW-008:** Narrow Window Handling | ✅ | N/A | ✅ Unit | `center_offset()` returns 0 correctly. Test: `tests/reader_width_unit_spec.lua` |
@@ -58,8 +58,8 @@ The reader_width feature uses a two-layer centering approach: window-level confi
 
 **Implementation Gaps:**
 - **Text wrapping not working** (window options not being applied - text extends beyond window)
-- Lists not centered (`bullet.lua` lacks `left_margin` config)
-- Blockquotes not centered (`quote.lua` lacks margin mechanism)
+- **List bullet positioning bug** (`bullet.lua`): When list items wrap to multiple lines, the bullet marker appears at the end of the wrapped content and is left-aligned (doesn't respect centering)
+- **Blockquote marker positioning bug** (`quote.lua`): Blockquote marker (▋) renders on the line after the blockquote content instead of at the beginning of the line. Root cause: overlay+concealment pattern conflicts with inline virtual text positioning at column 0
 - Table exception not implemented (should allow tables to exceed width)
 
 ## Architectural Concerns

@@ -9,7 +9,7 @@ Another paragraph here with more text to test the wrapping behavior when lines a
 ### Smaller Heading
 
 - List item one
-- List item two with a longer description that might wrap
+- List item two with a longer description that might wrap when the lines are super long like this is
 - List item three
 
 ```lua

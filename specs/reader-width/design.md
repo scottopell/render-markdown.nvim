@@ -341,19 +341,37 @@ Different markdown element renderers have varying levels of support for `reader_
 | **Heading** | ✅ Yes | `center_offset + user_margin` in box calculation | `heading.left_margin` | REQ-RW-005 |
 | **Code** | ✅ Yes | `center_offset + user_margin` in data setup | `code.left_margin` | REQ-RW-005 |
 | **Dash** | ✅ Yes | `center_offset + user_margin` in setup | `dash.left_margin` | REQ-RW-005 |
-| **List/Bullet** | ❌ No | Only has `left_pad` (inline padding), no margin support | `bullet.left_pad` | **Gap** in REQ-RW-005 |
-| **Blockquote** | ❌ No | Only overlays `>` markers, no margin mechanism | None | **Gap** in REQ-RW-005 |
+| **List/Bullet** | ❌ Broken | Has `left_pad` but no margin support. **Bug:** Bullets misposition on wrapped items (appear at end, left-aligned) | `bullet.left_pad` | **Bug** in REQ-RW-005 |
+| **Blockquote** | ❌ Broken | Overlays markers but no margin. **Bug:** Marker renders on wrong line (after content, not at start) | None | **Bug** in REQ-RW-005 |
 | **Table** | ⏭️ Planned | Should NOT be constrained (preserve structure) | N/A | REQ-RW-005 exception |
 
 **Key Findings:**
 
 1. **Working Elements (4/6):** Paragraph, heading, code, and dash renderers all support centering via the `left_margin` configuration option, which allows them to add `center_offset` padding.
 
-2. **Missing: Lists** - The `bullet.lua` renderer only has `left_pad` which adds inline padding around the bullet icon, not margin padding at the start of the line. To support centering, lists would need a `left_margin` config option and modification to add virtual text padding at column 0.
+2. **Broken: Lists** - The `bullet.lua` renderer has a positioning bug: when list items wrap to multiple lines, the bullet marker appears at the end of the wrapped content and is left-aligned (doesn't respect centering). Additionally, lacks `left_margin` config for proper margin support.
 
-3. **Missing: Blockquotes** - The `quote.lua` renderer only overlays the `>` marker with an icon. It has no margin mechanism at all. Supporting centering would require adding virtual text padding similar to paragraphs.
+3. **Broken: Blockquotes** - The `quote.lua` renderer has a positioning bug: the blockquote marker (▋) renders on the line after the content instead of at the beginning. Root cause: overlay+concealment pattern conflicts with inline virtual text at column 0. Also lacks margin mechanism.
 
 4. **Paragraph margin=0 Bug (Fixed):** The paragraph renderer was incorrectly skipping rendering when both `left_margin=0` and `indent=0`, even when `reader_width` was enabled. This prevented centering from working. Fixed in `paragraph.lua:27` by checking if `reader_width > 0` before skipping. (REQ-RW-010)
+
+### Marker Positioning Bugs
+
+Both list bullets and blockquote markers have positioning bugs when `reader_width` is enabled:
+
+**List Bullet Bug (`bullet.lua`):**
+- When list items wrap to multiple lines, the bullet marker appears at the end of the wrapped content
+- Bullet is left-aligned instead of respecting the center offset
+- Affects wrapped list items only; single-line list items render correctly
+
+**Blockquote Marker Bug (`quote.lua`):**
+- Blockquote marker (▋) renders on the line after the blockquote content instead of at the beginning of the line
+- Root cause: Using `virt_text_pos = 'inline'` at column 0 with concealment creates positioning conflicts
+- Multiple fix approaches attempted (overlay with padding, inline with concealment, line-by-line processing) all failed
+- The overlay+concealment pattern used for markers conflicts with inline virtual text positioning
+
+**Common Issue:**
+Both bugs stem from attempting to position markers (which use overlay/replacement patterns) in combination with the centering approach (which uses inline virtual text padding at column 0). Working elements (paragraphs, headings, code, dash) don't have markers to reposition, so they avoid this conflict.
 
 ## Width Constraint Implementation
 
@@ -558,14 +576,17 @@ Content width constraint works for element rendering (headings, code blocks, rul
 
 ### Lower Priority Gaps (Pending REQ-RW-003 Resolution)
 
-2. **Add `left_margin` support to lists (REQ-RW-005)**
-   - Modify `bullet.lua` to support `left_margin` config
-   - Add virtual text padding at column 0
-   - Similar to paragraph centering
+2. **Fix list bullet positioning bug (REQ-RW-005)**
+   - Currently: Bullets misposition on wrapped list items (appear at end, left-aligned)
+   - Need to resolve marker positioning conflict with inline virtual text
+   - Add `left_margin` config support
+   - Ensure bullets align with centered content on wrapped lines
 
-3. **Add margin mechanism to blockquotes (REQ-RW-005)**
-   - Modify `quote.lua` to support margin mechanism
-   - Add virtual text padding similar to paragraphs
+3. **Fix blockquote marker positioning bug (REQ-RW-005)**
+   - Currently: Marker renders on wrong line (after content instead of at start)
+   - Root cause: overlay+concealment conflicts with inline positioning at column 0
+   - Need to redesign marker rendering approach for compatibility with centering
+   - Add proper margin mechanism
 
 4. **Implement table width exception (REQ-RW-005)**
    - Add logic to skip width constraint for table renderers

@@ -2,6 +2,7 @@ local Base = require('render-markdown.render.base')
 local list = require('render-markdown.lib.list')
 local str = require('render-markdown.lib.str')
 local ts = require('render-markdown.core.ts')
+local env = require('render-markdown.lib.env')
 
 ---@class render.md.quote.Data
 ---@field callout? render.md.request.callout.Value
@@ -113,13 +114,43 @@ function Render:marker(node, index)
     if not range then
         return
     end
-    self.marks:add(self.config, 'quote', range[1], range[2], {
-        end_row = range[3],
-        end_col = range[4],
-        virt_text = { { self.data.icon, self.data.highlight } },
-        virt_text_pos = 'overlay',
-        virt_text_repeat_linebreak = self.data.repeat_linebreak,
-    })
+    -- Calculate center offset for reader_width centering
+    local reader_width = self.context.config.reader_width
+    local center_offset = env.win.center_offset(self.context.win, reader_width)
+
+    if center_offset > 0 then
+        -- When centered, we need to handle each line separately
+        -- Conceal the original '>' character(s) on each line
+        for row = range[1], range[3] do
+            -- Find the '>' on this specific row
+            local line = vim.api.nvim_buf_get_lines(self.context.buf, row, row + 1, false)[1]
+            if line then
+                local marker_col = line:find('>', 1, true)
+                if marker_col then
+                    -- Conceal just the '>' on this line
+                    self.marks:add(self.config, 'quote', row, marker_col - 1, {
+                        end_col = marker_col,
+                        conceal = '',
+                    })
+                    -- Add centered icon as inline virtual text at the start of this line
+                    local padding = string.rep(' ', center_offset)
+                    self.marks:add(self.config, 'quote', row, 0, {
+                        virt_text = { { padding .. self.data.icon, self.data.highlight } },
+                        virt_text_pos = 'inline',
+                    })
+                end
+            end
+        end
+    else
+        -- No centering, use original overlay behavior
+        self.marks:add(self.config, 'quote', range[1], range[2], {
+            end_row = range[3],
+            end_col = range[4],
+            virt_text = { { self.data.icon, self.data.highlight } },
+            virt_text_pos = 'overlay',
+            virt_text_repeat_linebreak = self.data.repeat_linebreak,
+        })
+    end
 end
 
 return Render
