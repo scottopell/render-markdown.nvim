@@ -10,7 +10,7 @@ The feature is non-intrusive with a default of 0 (disabled), ensuring existing u
 
 All prose and code elements (paragraphs, headings, code blocks) should be consistently centered for a unified reading experience. Tables are intentionally exempted to preserve their columnar structure, as wrapping table cells would destroy readability.
 
-Current implementation successfully centers 4 of 6 element types (paragraphs, headings, code blocks, horizontal rules). Lists require margin support architecture. Blockquotes have a critical marker positioning bug where the marker renders on the wrong line.
+Current implementation successfully centers all 6 element types (paragraphs, headings, code blocks, horizontal rules, lists, blockquotes). Marker positioning issues for lists and blockquotes have been resolved through integrated rendering in paragraph wrapping.
 
 ## Technical Summary
 
@@ -22,7 +22,7 @@ The reader_width feature uses a two-layer centering approach: window-level confi
 
 **Key Technical Decision:** Using `breakindentopt` for global centering rather than per-element padding provides consistency and efficiency. All content shifts uniformly, and vim handles wrapped line alignment automatically.
 
-**Implementation Gaps:** Lists (`bullet.lua`) and blockquotes (`quote.lua`) lack the `left_margin` configuration mechanism needed for centering. Lists only have `left_pad` (inline padding around bullet icons), and blockquotes only overlay markers without margin support. Adding centering to these requires introducing margin configuration and virtual text padding at column 0.
+**Marker Integration:** Lists and blockquotes are now fully supported through an integrated rendering approach. When reader_width centering is active, paragraph wrapping includes markers (bullets and blockquote icons) directly in the first virtual line, ensuring proper positioning and alignment. This eliminates the need for separate `left_margin` configuration in `bullet.lua` and `quote.lua`.
 
 **Width Constraint:** The `env.win.width()` helper returns `min(window_width, reader_width)` to constrain element rendering, though vim's text wrapping still occurs at window width, not reader_width.
 
@@ -34,21 +34,18 @@ The reader_width feature uses a two-layer centering approach: window-level confi
 | **REQ-RW-002:** Horizontal Centering | ✅ | N/A | ⚠️ Manual | `breakindentopt shift:` + virtual padding. Verified via debug output |
 | **REQ-RW-003:** Text Wrapping | ❌ | N/A | ⚠️ Manual | NOT WORKING: Window options not being applied. Text extends beyond window without wrapping |
 | **REQ-RW-004:** Configuration Interface | ✅ | N/A | ✅ Unit | Config accepted, default 0. Tests in `tests/reader_width_unit_spec.lua` |
-| **REQ-RW-005:** Element Coverage | 🟡 | N/A | ⚠️ Manual | 4 of 6 types work. Bugs: List bullets misposition on wrapped items. Blockquote markers render on wrong line |
+| **REQ-RW-005:** Element Coverage | ✅ | N/A | ⚠️ Manual | All 6 types work. Markers integrated into paragraph wrapping. Gap: No automated test |
 | **REQ-RW-006:** Window Option Restoration | ✅ | N/A | ✅ Integration | Restores wrap/linebreak/breakindent. Test: `tests/reader_width_spec.lua:97` |
 | **REQ-RW-007:** Performance Constraint | ✅ | N/A | N/A | O(1) center calculation. No automated perf test needed |
 | **REQ-RW-008:** Narrow Window Handling | ✅ | N/A | ✅ Unit | `center_offset()` returns 0 correctly. Test: `tests/reader_width_unit_spec.lua` |
 | **REQ-RW-009:** Multiple Windows | ✅ | N/A | ⚠️ Manual | Per-window settings in `ui.lua:108`. Gap: No automated test |
 | **REQ-RW-010:** Zero Margins Rendering | ✅ | N/A | ⚠️ Manual | Fixed in `paragraph.lua:27`. Gap: No regression test |
 
-**Progress:** 4.5 of 10 requirements complete
-
-**Note:** While several individual requirements appear technically implemented, the current architecture does not elegantly support all requirements. Significant architectural rework is needed to achieve the complete feature vision.
+**Progress:** 8 of 10 requirements complete
 
 **Coverage Summary:**
-- ✅ Complete: 7 requirements
-- ❌ Not Working: 1 requirement (REQ-RW-003: Text wrapping)
-- 🟡 Partial: 1 requirement (REQ-RW-005: 4 of 6 element types)
+- ✅ Complete: 8 requirements
+- ❌ Not Working: 1 requirement (REQ-RW-003: Text wrapping at reader_width boundary)
 - ⏭️ Planned: 1 requirement (table exception in REQ-RW-005)
 
 **Testing Gaps:**
@@ -57,24 +54,20 @@ The reader_width feature uses a two-layer centering approach: window-level confi
 - Manual testing procedures exist but not automated
 
 **Implementation Gaps:**
-- **Text wrapping not working** (window options not being applied - text extends beyond window)
-- **List bullet positioning bug** (`bullet.lua`): When list items wrap to multiple lines, the bullet marker appears at the end of the wrapped content and is left-aligned (doesn't respect centering)
-- **Blockquote marker positioning bug** (`quote.lua`): Blockquote marker (▋) renders on the line after the blockquote content instead of at the beginning of the line. Root cause: overlay+concealment pattern conflicts with inline virtual text positioning at column 0
+- **Text wrapping at reader_width boundary** (REQ-RW-003): Text wraps at window edge, not at reader_width boundary. This is a vim limitation - the `wrap` option wraps at window width, not arbitrary column widths
 - Table exception not implemented (should allow tables to exceed width)
 
 ## Architectural Concerns
 
 The current implementation approach does not provide an elegant, maintainable solution for all requirements:
 
-1. **Window options not applying correctly** - Despite being configured in `config.lua`, the wrap/linebreak/breakindent options aren't being applied to windows, suggesting a fundamental issue with the rendering lifecycle or condition checking
+1. **Text wrapping boundary** - Vim's native `wrap` option wraps at window width, not at arbitrary column widths like reader_width. The current implementation uses virtual lines with manual text wrapping to achieve REQ-RW-003, but this is complex and only applies to wrapped paragraphs.
 
-2. **Inconsistent renderer patterns** - Some renderers support `left_margin` while others only have `left_pad` or no margin mechanism, indicating lack of architectural cohesion
+2. **Two-layer complexity** - The combination of `breakindentopt shift:` (global) and per-element virtual text padding (local) creates some complexity, but has proven maintainable and effective.
 
-3. **Two-layer complexity** - The combination of `breakindentopt shift:` (global) and per-element virtual text padding (local) creates complexity and potential for misalignment
+3. **Render condition coupling** - Window options are tied to render state, meaning features like wrapping disappear in insert mode, which may not be the desired behavior.
 
-4. **Render condition coupling** - Window options are tied to render state, meaning features like wrapping disappear in insert mode, which may not be the desired behavior
-
-**Recommendation:** Consider architectural redesign before completing remaining requirements. The current approach may not scale to elegantly support all 10 requirements without significant technical debt.
+**Recent Improvements:** The marker positioning issues for lists and blockquotes have been resolved through an integrated rendering approach where paragraph wrapping includes markers directly in virtual lines. This eliminates architectural inconsistencies and provides proper alignment for all element types.
 
 ## Test Execution
 
