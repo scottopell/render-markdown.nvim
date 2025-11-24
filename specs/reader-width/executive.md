@@ -1,5 +1,24 @@
 # Reader Width Feature - Executive Summary
 
+## ⚠️ PROJECT DISCONTINUED - 2025-11-24
+
+**This feature has been superseded by [no-neck-pain.nvim](https://github.com/shortcuts/no-neck-pain.nvim).**
+
+After implementing 3000+ lines of rendering-level changes to achieve centered, width-constrained markdown content, we discovered that no-neck-pain.nvim solves the same problem more elegantly at the vim window level. Key advantages of the window-based approach:
+
+1. **Simpler Architecture**: Creates side-buffer padding instead of modifying rendering pipeline
+2. **Native Text Wrapping**: Uses vim's built-in `wrap` without fighting window width boundaries (our REQ-RW-003 failure)
+3. **Works Everywhere**: Applies to all filetypes and modes, not just rendered markdown
+4. **Better Separation of Concerns**: render-markdown.nvim should focus on rendering markdown beautifully, not window layout
+
+**Recommendation**: Users wanting centered reading should use no-neck-pain.nvim. This branch demonstrates that rendering-level centering, while technically possible, introduces unnecessary complexity when window management is the more appropriate solution level.
+
+See "Salvageable Ideas for Future Work" section below for techniques that may still be valuable.
+
+---
+
+# Reader Width Feature - Historical Summary
+
 ## Requirements Summary
 
 The reader_width feature provides a book-like reading experience for markdown files by constraining content to a comfortable column width (e.g., 80 characters) and centering it within wide editor windows. This solves the readability problem where markdown content stretches across the full width of modern widescreen displays, making lines too long to read comfortably.
@@ -92,3 +111,125 @@ nvim --headless --noplugin -u tests/minimal_init.lua \
 :luafile debug_config.lua         " Verify reader_width config
 :luafile debug_render.lua         " Check rendering conditions
 ```
+
+---
+
+## Salvageable Ideas for Future Work
+
+While the overall feature is superseded, several implementation techniques developed here may be valuable for other rendering enhancements:
+
+### 1. Two-Layer Centering Pattern (`breakindentopt` + Virtual Text)
+
+**Location**: `lua/render-markdown/core/ui.lua:108-120`
+
+The combination of:
+- Global shift via `vim.wo[win].breakindentopt = "shift:" .. offset`
+- Per-element virtual text padding
+
+This pattern successfully achieved uniform centering across all element types. While not needed for window-width centering, this technique could be useful for:
+- Indenting specific markdown sections (e.g., nested block quotes beyond standard indentation)
+- Creating "margin notes" or sidebar annotations at specific column offsets
+- Implementing hanging indents for definition lists or footnotes
+
+**Key Insight**: `breakindentopt shift:` affects ALL text in the window, including virtual text, making it powerful for uniform transformations.
+
+### 2. Integrated Marker Rendering in Paragraph Wrapping
+
+**Location**: `lua/render-markdown/render/markdown/paragraph.lua:25-78`
+
+When wrapping paragraphs into multiple virtual lines, markers (bullets, blockquote icons) were integrated directly into the first virtual line rather than rendered separately. This solved alignment issues where markers would be mispositioned.
+
+**Technique**:
+```lua
+-- Build first line with marker included
+local first_line = marker_text .. wrapped_lines[1]
+-- Subsequent lines just get padding
+for i = 2, #wrapped_lines do
+  table.insert(virt_lines, { { padding .. wrapped_lines[i] } })
+end
+```
+
+**Potential Applications**:
+- Custom rendering for definition lists (`<dt>`/`<dd>` tags) where the term needs special positioning
+- Enhanced checklist items with custom icons that need to stay aligned with wrapped text
+- Multi-line callout boxes where the icon/emoji appears only on the first line
+
+### 3. Window Option State Management
+
+**Location**: `lua/render-markdown/state.lua:65-80` and `lua/render-markdown/core/ui.lua:90-100`
+
+Implemented pattern for:
+- Saving original window option values before modification
+- Restoring them when feature is disabled or buffer unloaded
+- Per-window state tracking to handle split windows correctly
+
+**Code Pattern**:
+```lua
+-- Save original values
+local saved_wrap = vim.wo[win].wrap
+-- Apply temporary values
+vim.wo[win].wrap = true
+-- Restore on disable/unload
+vim.wo[win].wrap = saved_wrap
+```
+
+**Potential Applications**:
+- Any feature that temporarily modifies window options (conceallevel, foldmethod, etc.)
+- Mode-dependent rendering that changes window behavior in insert vs normal mode
+- Buffer-specific vim option overrides that need clean restoration
+
+### 4. Width-Constrained Rendering Helper
+
+**Location**: `lua/render-markdown/lib/env.lua:108-115`
+
+The `env.win.width()` helper was modified to return `min(actual_width, reader_width)`, constraining all element rendering calculations.
+
+**Technique**: Centralized width calculation that all renderers call instead of directly accessing window width.
+
+**Potential Applications**:
+- Responsive rendering that adapts to window size (e.g., simplifying UI in narrow windows)
+- Maximum width constraints for specific element types (e.g., limiting code blocks to 120 chars)
+- Breakpoint-based rendering (different styles for narrow/medium/wide windows)
+
+### 5. Virtual Line Text Wrapping Algorithm
+
+**Location**: `lua/render-markdown/render/markdown/paragraph.lua:180-245`
+
+Implemented a custom text wrapping algorithm that:
+- Wraps at word boundaries (respecting `linebreak` semantics)
+- Handles indentation on wrapped lines
+- Integrates with markdown-specific considerations (inline code spans, links)
+
+While vim's native wrapping is usually sufficient, this shows how to implement custom wrapping logic when needed.
+
+**Potential Applications**:
+- Justified text rendering (distributing spaces for flush right margin)
+- Smart wrapping that avoids breaking within inline code or link text
+- Custom wrapping for non-standard element types (e.g., keeping key-value pairs together in YAML frontmatter)
+
+### 6. Per-Window Rendering State
+
+**Location**: `lua/render-markdown/core/ui.lua:108`
+
+Pattern for tracking rendering state per-window (not per-buffer) to handle split window scenarios where the same buffer appears in multiple windows of different sizes.
+
+**Key Pattern**: Using `vim.wo[win]` for window-local state rather than buffer-local state.
+
+**Potential Applications**:
+- Any feature that needs to render differently based on window dimensions
+- Adaptive detail levels (more detail in larger windows, simplified in smaller windows)
+- Window-specific UI preferences (one window in "focus mode", another in "full detail mode")
+
+---
+
+## Lessons Learned
+
+1. **Choose the Right Abstraction Level**: Window management problems are better solved at the window level (like no-neck-pain.nvim) than the rendering level. render-markdown.nvim should focus on *what* to render, not *where* in the window.
+
+2. **Fight Vim's Defaults Sparingly**: The REQ-RW-003 failure (text wrapping at reader_width boundary) stemmed from fighting vim's fundamental assumption that wrapping happens at window width. Working with vim's primitives (like no-neck-pain does) is more maintainable.
+
+3. **Complexity Budget**: 3000+ lines of changes for a feature that can be achieved with ~500 lines of window management code suggests the wrong approach. Always evaluate if there's a simpler solution at a different level of abstraction.
+
+4. **Separation of Concerns**: Mixing window layout concerns (centering, width constraint) with content rendering (markdown styling) created tight coupling and made the codebase harder to reason about.
+
+5. **Integration Testing is Critical**: The text wrapping issue (REQ-RW-003) would have been caught earlier with better automated integration tests that verify actual window behavior, not just internal state.
