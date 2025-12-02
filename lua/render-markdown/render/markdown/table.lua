@@ -261,10 +261,27 @@ function Render:delimiter()
     line:pad(str.spaces('start', delim.node.text))
     line:text(delimiter, self.config.head)
     line:pad(str.width(delim.node.text) - line:width())
-    self.marks:over(self.config, 'table_border', delim.node, {
-        virt_text = line:get(),
-        virt_text_pos = 'overlay',
-    })
+
+    -- Apply leftcol trimming for horizontal scroll
+    local leftcol = self.context.view:get_leftcol()
+    local start_col = delim.node.start_col
+    local trim_amount = math.max(0, leftcol - start_col)
+
+    if trim_amount > 0 then
+        local width = line:width()
+        if trim_amount < width then
+            line = line:sub(trim_amount + 1, width)
+            self.marks:add(self.config, 'table_border', delim.node.start_row, leftcol, {
+                virt_text = line:get(),
+                virt_text_pos = 'overlay',
+            })
+        end
+    else
+        self.marks:over(self.config, 'table_border', delim.node, {
+            virt_text = line:get(),
+            virt_text_pos = 'overlay',
+        })
+    end
 end
 
 ---@private
@@ -275,11 +292,15 @@ function Render:row(row)
     local highlight = header and self.config.head or self.config.row
 
     if vim.tbl_contains({ 'trimmed', 'padded', 'raw' }, self.config.cell) then
+        local leftcol = self.context.view:get_leftcol()
         for _, pipe in ipairs(row.pipes) do
-            self.marks:over(self.config, 'table_border', pipe, {
-                virt_text = { { icon, highlight } },
-                virt_text_pos = 'overlay',
-            })
+            -- Skip pipes that are scrolled off-screen to the left
+            if pipe.start_col >= leftcol then
+                self.marks:over(self.config, 'table_border', pipe, {
+                    virt_text = { { icon, highlight } },
+                    virt_text_pos = 'overlay',
+                })
+            end
         end
     end
 
@@ -409,14 +430,36 @@ function Render:border()
         local row, target = node:line(above and 'above' or 'below', 1)
         local available = target and str.width(target) == 0
 
+        -- Apply leftcol trimming for horizontal scroll
+        local leftcol = self.context.view:get_leftcol()
+
         if not virtual and available and self.context.used:take(row) then
-            self.marks:add(self.config, 'table_border', row, 0, {
+            -- Overlay mode: trim line and render at leftcol position
+            if leftcol > 0 then
+                local width = line:width()
+                if leftcol < width then
+                    line = line:sub(leftcol + 1, width)
+                else
+                    return
+                end
+            end
+            self.marks:add(self.config, 'table_border', row, leftcol, {
                 virt_text = line:get(),
                 virt_text_pos = 'overlay',
             })
         else
+            -- Virtual lines mode: trim full line including indent
+            local full_line = self:indent():line(true):extend(line)
+            if leftcol > 0 then
+                local width = full_line:width()
+                if leftcol < width then
+                    full_line = full_line:sub(leftcol + 1, width)
+                else
+                    return
+                end
+            end
             self.marks:add(self.config, 'virtual_lines', node.start_row, 0, {
-                virt_lines = { self:indent():line(true):extend(line):get() },
+                virt_lines = { full_line:get() },
                 virt_lines_above = above,
             })
         end
