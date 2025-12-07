@@ -10,6 +10,7 @@ describe('view', function()
         env.buf.wins.on_call_with(0).returns(vim.tbl_keys(ranges))
         for win, range in pairs(ranges) do
             env.range.on_call_with(0, win, 10).returns(range)
+            env.win.view.on_call_with(win).returns({ leftcol = 0 })
         end
     end
 

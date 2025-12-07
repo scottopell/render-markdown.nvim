@@ -232,6 +232,66 @@ function Render:run()
     end
 end
 
+---Build a row Line object using calculated column widths (same approach as delimiter)
+---This ensures consistent widths for horizontal scroll alignment
+---@private
+---@param row render.md.table.Row
+---@param highlight string
+---@return render.md.Line
+function Render:build_row_line(row, highlight)
+    local line = self:line()
+    local icon = self.config.border[10] -- │
+    local delim_cols = self.data.delim.cols
+
+    -- Leading indent (spaces before first pipe)
+    line:pad(str.spaces('start', row.node.text))
+
+    -- First pipe
+    line:text(icon, highlight)
+
+    for i, col in ipairs(row.cols) do
+        local delim_col = delim_cols[i]
+        local target_width = delim_col.width
+
+        -- Extract cell content from between pipes
+        -- Positions are buffer columns (0-indexed), convert to display columns for str.sub (1-indexed)
+        local row_start = row.node.start_col
+        local content_start = row.pipes[i].end_col - row_start + 1
+        local content_end = row.pipes[i + 1].start_col - row_start
+
+        -- Extract the cell region (content between pipes, including spaces)
+        local cell_content = str.sub(row.node.text, content_start, content_end)
+        local cell_width = str.width(cell_content)
+
+        -- Pad to match target width with alignment
+        if cell_width < target_width then
+            local fill = target_width - cell_width
+            if delim_col.alignment == Alignment.center then
+                local left_pad = math.floor(fill / 2)
+                line:pad(left_pad)
+                line:text(cell_content, highlight)
+                line:pad(fill - left_pad)
+            elseif delim_col.alignment == Alignment.right then
+                line:pad(fill)
+                line:text(cell_content, highlight)
+            else -- left or default
+                line:text(cell_content, highlight)
+                line:pad(fill)
+            end
+        elseif cell_width > target_width then
+            -- Trim if needed (shouldn't happen with correct width calculation)
+            line:text(str.sub(cell_content, 1, target_width), highlight)
+        else
+            line:text(cell_content, highlight)
+        end
+
+        -- Separator pipe
+        line:text(icon, highlight)
+    end
+
+    return line
+end
+
 ---@private
 function Render:delimiter()
     local delim, border = self.data.delim, self.config.border
@@ -290,17 +350,39 @@ function Render:row(row)
     local icon = self.config.border[10]
     local header = row.node.type == 'pipe_table_header'
     local highlight = header and self.config.head or self.config.row
+    local leftcol = self.context.view:get_leftcol()
 
-    if vim.tbl_contains({ 'trimmed', 'padded', 'raw' }, self.config.cell) then
-        local leftcol = self.context.view:get_leftcol()
-        for _, pipe in ipairs(row.pipes) do
-            -- Skip pipes that are scrolled off-screen to the left
-            if pipe.start_col >= leftcol then
-                self.marks:over(self.config, 'table_border', pipe, {
-                    virt_text = { { icon, highlight } },
+    -- When horizontally scrolled, use full-line overlay with calculated widths
+    -- This matches delimiter()'s approach to ensure consistent alignment
+    if leftcol > 0 then
+        local line = self:build_row_line(row, highlight)
+        local start_col = row.node.start_col
+        local trim_amount = math.max(0, leftcol - start_col)
+
+        if trim_amount > 0 then
+            local width = line:width()
+            if trim_amount < width then
+                line = line:sub(trim_amount + 1, width)
+                self.marks:add(self.config, 'table_border', row.node.start_row, leftcol, {
+                    virt_text = line:get(),
                     virt_text_pos = 'overlay',
                 })
             end
+        else
+            self.marks:over(self.config, 'table_border', row.node, {
+                virt_text = line:get(),
+                virt_text_pos = 'overlay',
+            })
+        end
+        return
+    end
+
+    if vim.tbl_contains({ 'trimmed', 'padded', 'raw' }, self.config.cell) then
+        for _, pipe in ipairs(row.pipes) do
+            self.marks:over(self.config, 'table_border', pipe, {
+                virt_text = { { icon, highlight } },
+                virt_text_pos = 'overlay',
+            })
         end
     end
 
