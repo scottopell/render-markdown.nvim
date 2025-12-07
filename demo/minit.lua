@@ -17,7 +17,7 @@ vim.opt.rtp:prepend(lazypath)
 
 -- selene: allow(mixed_table)
 require('lazy').setup({
-    dev = { path = '~/dev/repos/personal' },
+    dev = { path = '~/dev' },
     spec = {
         {
             'folke/tokyonight.nvim',
@@ -45,19 +45,11 @@ require('lazy').setup({
         },
         {
             'nvim-treesitter/nvim-treesitter',
-            branch = 'main',
             build = ':TSUpdate',
             config = function()
-                require('nvim-treesitter')
-                    .install({ 'html', 'latex', 'markdown', 'markdown_inline' })
-                    :wait()
-
-                vim.api.nvim_create_autocmd('FileType', {
-                    group = vim.api.nvim_create_augroup('Highlighter', {}),
-                    pattern = 'markdown',
-                    callback = function(args)
-                        vim.treesitter.start(args.buf)
-                    end,
+                require('nvim-treesitter.configs').setup({
+                    ensure_installed = { 'html', 'markdown', 'markdown_inline' },
+                    highlight = { enable = true },
                 })
             end,
         },
@@ -77,7 +69,28 @@ require('lazy').setup({
                 'nvim-mini/mini.nvim',
             },
             config = function()
-                require('render-markdown').setup({})
+                require('render-markdown').setup({
+                    anti_conceal = {
+                        enabled = false,
+                    },
+                })
+
+                -- Quick reload for development iteration
+                vim.keymap.set('n', '<leader>r', function()
+                    for name, _ in pairs(package.loaded) do
+                        if name:match('^render%-markdown') then
+                            package.loaded[name] = nil
+                        end
+                    end
+                    require('render-markdown').setup({})
+                    vim.cmd('e')
+                    print('render-markdown reloaded')
+                end, { desc = 'Reload render-markdown' })
+
+                -- Show leftcol for debugging
+                vim.keymap.set('n', '<leader>l', function()
+                    print('leftcol = ' .. vim.fn.winsaveview().leftcol)
+                end, { desc = 'Show leftcol' })
             end,
         },
     },
