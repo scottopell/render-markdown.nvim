@@ -16,10 +16,6 @@ function M.lazy(key)
     if not config_ok or not plugin_ok then
         return {}
     end
-    -- Check if lazy.nvim is fully initialized (spec may be nil during partial load)
-    if not lazy_config.spec or not lazy_config.spec.plugins then
-        return {}
-    end
     local name = 'render-markdown.nvim'
     local plugin = lazy_config.spec.plugins[name]
     if not plugin then
