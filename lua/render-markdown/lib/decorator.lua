@@ -4,6 +4,7 @@ local compat = require('render-markdown.lib.compat')
 ---@field private buf integer
 ---@field private timer uv.uv_timer_t
 ---@field private running boolean
+---@field private pending fun()?
 ---@field private marks render.md.Extmark[]
 ---@field private tick integer?
 ---@field n integer
@@ -17,6 +18,7 @@ function Decorator.new(buf)
     self.buf = buf
     self.timer = assert(compat.uv.new_timer())
     self.running = false
+    self.pending = nil
     self.marks = {}
     self.tick = nil
     self.n = 0
@@ -50,13 +52,27 @@ end
 ---@param callback fun()
 function Decorator:schedule(debounce, ms, callback)
     if debounce and ms > 0 then
-        self.timer:start(ms, 0, function()
-            self.running = false
-        end)
-        if not self.running then
+        if self.running then
+            -- Store latest callback to execute after debounce (trailing edge)
+            self.pending = callback
+        else
+            -- Execute immediately (leading edge)
             self.running = true
+            self.pending = nil
             vim.schedule(callback)
         end
+        -- Always reset timer to debounce from latest event
+        self.timer:start(ms, 0, function()
+            vim.schedule(function()
+                self.running = false
+                -- Execute pending callback if state changed during debounce
+                if self.pending then
+                    local pending = self.pending
+                    self.pending = nil
+                    pending()
+                end
+            end)
+        end)
     else
         vim.schedule(callback)
     end

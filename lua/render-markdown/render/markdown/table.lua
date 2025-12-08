@@ -232,6 +232,51 @@ function Render:run()
     end
 end
 
+---Build a row Line object using calculated column widths (same approach as delimiter)
+---This ensures consistent widths for horizontal scroll alignment
+---@private
+---@param row render.md.table.Row
+---@param highlight string
+---@return render.md.Line
+function Render:build_row_line(row, highlight)
+    local line = self:line()
+    local icon = self.config.border[10] -- │
+    local delim_cols = self.data.delim.cols
+
+    -- Leading indent (spaces before first pipe)
+    line:pad(str.spaces('start', row.node.text))
+
+    -- First pipe
+    line:text(icon, highlight)
+
+    for i, col in ipairs(row.cols) do
+        local delim_col = delim_cols[i]
+        local target_width = delim_col.width
+
+        -- Extract cell content from between pipes
+        -- Positions are buffer columns (0-indexed), convert to display columns for str.sub (1-indexed)
+        local row_start = row.node.start_col
+        local content_start = row.pipes[i].end_col - row_start + 1
+        local content_end = row.pipes[i + 1].start_col - row_start
+
+        -- Extract the cell region (content between pipes, including spaces)
+        local cell_content = str.sub(row.node.text, content_start, content_end)
+        local cell_width = str.width(cell_content)
+
+        -- Pad to match target width (left-align)
+        line:text(cell_content, highlight)
+        local fill = target_width - cell_width
+        if fill > 0 then
+            line:pad(fill)
+        end
+
+        -- Separator pipe
+        line:text(icon, highlight)
+    end
+
+    return line
+end
+
 ---@private
 function Render:delimiter()
     local delim, border = self.data.delim, self.config.border
@@ -261,10 +306,27 @@ function Render:delimiter()
     line:pad(str.spaces('start', delim.node.text))
     line:text(delimiter, self.config.head)
     line:pad(str.width(delim.node.text) - line:width())
-    self.marks:over(self.config, 'table_border', delim.node, {
-        virt_text = line:get(),
-        virt_text_pos = 'overlay',
-    })
+
+    -- Apply leftcol trimming for horizontal scroll
+    local leftcol = self.context.view:get_leftcol()
+    local start_col = delim.node.start_col
+    local trim_amount = math.max(0, leftcol - start_col)
+
+    if trim_amount > 0 then
+        local width = line:width()
+        if trim_amount < width then
+            line = line:sub(trim_amount + 1, width)
+            self.marks:add(self.config, 'table_border', delim.node.start_row, leftcol, {
+                virt_text = line:get(),
+                virt_text_pos = 'overlay',
+            })
+        end
+    else
+        self.marks:over(self.config, 'table_border', delim.node, {
+            virt_text = line:get(),
+            virt_text_pos = 'overlay',
+        })
+    end
 end
 
 ---@private
@@ -273,6 +335,32 @@ function Render:row(row)
     local icon = self.config.border[10]
     local header = row.node.type == 'pipe_table_header'
     local highlight = header and self.config.head or self.config.row
+    local leftcol = self.context.view:get_leftcol()
+
+    -- When horizontally scrolled, use full-line overlay with calculated widths
+    -- This matches delimiter()'s approach to ensure consistent alignment
+    if leftcol > 0 then
+        local line = self:build_row_line(row, highlight)
+        local start_col = row.node.start_col
+        local trim_amount = math.max(0, leftcol - start_col)
+
+        if trim_amount > 0 then
+            local width = line:width()
+            if trim_amount < width then
+                line = line:sub(trim_amount + 1, width)
+                self.marks:add(self.config, 'table_border', row.node.start_row, leftcol, {
+                    virt_text = line:get(),
+                    virt_text_pos = 'overlay',
+                })
+            end
+        else
+            self.marks:over(self.config, 'table_border', row.node, {
+                virt_text = line:get(),
+                virt_text_pos = 'overlay',
+            })
+        end
+        return
+    end
 
     if vim.tbl_contains({ 'trimmed', 'padded', 'raw' }, self.config.cell) then
         for _, pipe in ipairs(row.pipes) do
@@ -409,14 +497,36 @@ function Render:border()
         local row, target = node:line(above and 'above' or 'below', 1)
         local available = target and str.width(target) == 0
 
+        -- Apply leftcol trimming for horizontal scroll
+        local leftcol = self.context.view:get_leftcol()
+
         if not virtual and available and self.context.used:take(row) then
-            self.marks:add(self.config, 'table_border', row, 0, {
+            -- Overlay mode: trim line and render at leftcol position
+            if leftcol > 0 then
+                local width = line:width()
+                if leftcol < width then
+                    line = line:sub(leftcol + 1, width)
+                else
+                    return
+                end
+            end
+            self.marks:add(self.config, 'table_border', row, leftcol, {
                 virt_text = line:get(),
                 virt_text_pos = 'overlay',
             })
         else
+            -- Virtual lines mode: trim full line including indent
+            local full_line = self:indent():line(true):extend(line)
+            if leftcol > 0 then
+                local width = full_line:width()
+                if leftcol < width then
+                    full_line = full_line:sub(leftcol + 1, width)
+                else
+                    return
+                end
+            end
             self.marks:add(self.config, 'virtual_lines', node.start_row, 0, {
-                virt_lines = { self:indent():line(true):extend(line):get() },
+                virt_lines = { full_line:get() },
                 virt_lines_above = above,
             })
         end

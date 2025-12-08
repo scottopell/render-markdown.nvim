@@ -102,7 +102,6 @@ function Updater:run()
     local render = self.config.enabled
         and self.config.resolved:render(self.mode)
         and (state.render_in_diff or not in_diff)
-        and env.win.view(self.win).leftcol == 0
     log.buf('info', 'Render', self.buf, render)
     local next_state = render and 'rendered' or 'default'
     for _, win in ipairs(env.buf.wins(self.buf)) do
