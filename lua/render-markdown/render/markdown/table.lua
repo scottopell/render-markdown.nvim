@@ -263,23 +263,11 @@ function Render:build_row_line(row, highlight)
         local cell_content = str.sub(row.node.text, content_start, content_end)
         local cell_width = str.width(cell_content)
 
-        -- Pad to match target width with alignment
+        -- Pad to match target width (left-align)
+        line:text(cell_content, highlight)
         local fill = target_width - cell_width
         if fill > 0 then
-            if delim_col.alignment == Alignment.center then
-                local left_pad = math.floor(fill / 2)
-                line:pad(left_pad)
-                line:text(cell_content, highlight)
-                line:pad(fill - left_pad)
-            elseif delim_col.alignment == Alignment.right then
-                line:pad(fill)
-                line:text(cell_content, highlight)
-            else -- left or default
-                line:text(cell_content, highlight)
-                line:pad(fill)
-            end
-        else
-            line:text(cell_content, highlight)
+            line:pad(fill)
         end
 
         -- Separator pipe
