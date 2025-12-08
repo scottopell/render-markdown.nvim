@@ -264,8 +264,8 @@ function Render:build_row_line(row, highlight)
         local cell_width = str.width(cell_content)
 
         -- Pad to match target width with alignment
-        if cell_width < target_width then
-            local fill = target_width - cell_width
+        local fill = target_width - cell_width
+        if fill > 0 then
             if delim_col.alignment == Alignment.center then
                 local left_pad = math.floor(fill / 2)
                 line:pad(left_pad)
@@ -278,9 +278,6 @@ function Render:build_row_line(row, highlight)
                 line:text(cell_content, highlight)
                 line:pad(fill)
             end
-        elseif cell_width > target_width then
-            -- Trim if needed (shouldn't happen with correct width calculation)
-            line:text(str.sub(cell_content, 1, target_width), highlight)
         else
             line:text(cell_content, highlight)
         end
