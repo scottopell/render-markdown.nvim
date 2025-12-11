@@ -501,11 +501,18 @@ function M.get_overlay_widths(rows)
         for _, mark in ipairs(marks) do
             local details = mark[4]
             if details.virt_text_pos == 'overlay' and details.virt_text then
-                local text = details.virt_text[1][1]
+                -- Calculate total width across all chunks in the virt_text
+                local total_width = 0
+                local text_preview = ''
+                for _, chunk in ipairs(details.virt_text) do
+                    local chunk_text = chunk[1] or ''
+                    total_width = total_width + vim.fn.strdisplaywidth(chunk_text)
+                    text_preview = text_preview .. chunk_text
+                end
                 widths[#widths + 1] = {
                     row = row,
-                    width = vim.fn.strdisplaywidth(text),
-                    text = text,
+                    width = total_width,
+                    text = text_preview,
                 }
             end
         end
@@ -536,6 +543,57 @@ function M.assert_overlay_widths_equal(rows)
                 first_width,
                 width,
                 ('Row %d max overlay width %d != expected %d'):format(row, width, first_width)
+            )
+        end
+    end
+end
+
+---Get full-line overlay widths for specified rows (filters out small overlays like individual pipes)
+---@param rows integer[]
+---@param min_width? integer Minimum width to consider a "full-line" overlay (default 10)
+---@return table<integer, integer> Map of row -> width for rows with full-line overlays
+function M.get_fullline_overlay_widths(rows, min_width)
+    min_width = min_width or 10
+    local widths = M.get_overlay_widths(rows)
+    local result = {} ---@type table<integer, integer>
+    for _, w in ipairs(widths) do
+        if w.width >= min_width then
+            result[w.row] = w.width
+        end
+    end
+    return result
+end
+
+---Assert that all full-line overlays have equal widths
+---Only compares rows that have full-line overlays (width >= min_width)
+---This is useful for testing scrolled tables where all rows should use full-line overlay mode
+---@param rows integer[]
+---@param min_width? integer Minimum width to consider (default 10)
+function M.assert_fullline_widths_equal(rows, min_width)
+    local widths = M.get_fullline_overlay_widths(rows, min_width)
+
+    local count = vim.tbl_count(widths)
+    if count < 2 then
+        -- Not enough full-line overlays to compare (may be at leftcol=0 using individual pipes)
+        return
+    end
+
+    local first_width = nil
+    local first_row = nil
+    for row, width in pairs(widths) do
+        if first_width == nil then
+            first_width = width
+            first_row = row
+        else
+            assert.equals(
+                first_width,
+                width,
+                ('Row %d full-line overlay width %d != row %d width %d'):format(
+                    row,
+                    width,
+                    first_row,
+                    first_width
+                )
             )
         end
     end
