@@ -55,6 +55,14 @@ function M.setup.text(lines, opts)
     vim.wait(0)
 end
 
+---Set window view state and trigger re-render
+---@param opts vim.fn.winrestview.dict
+function M.setup.view(opts)
+    vim.fn.winrestview(opts)
+    require('render-markdown.api').render({ buf = 0 })
+    vim.wait(0)
+end
+
 M.row = require('tests.helpers.row').new
 
 M.marks = require('tests.helpers.marks').new
@@ -426,7 +434,6 @@ function M.assert_marks(expected)
     assert.same(#expected, #actual, 'different number of marks found')
 end
 
----@private
 ---@return render.md.test.MarkInfo[]
 function M.actual_marks()
     local ui = require('render-markdown.core.ui')
@@ -470,6 +477,68 @@ function M.actual_screen()
         actual[#actual + 1] = line
     end
     return actual
+end
+
+---@class render.md.test.OverlayInfo
+---@field row integer
+---@field width integer
+---@field text string
+
+---Get overlay widths for specified rows
+---@param rows integer[]
+---@return render.md.test.OverlayInfo[]
+function M.get_overlay_widths(rows)
+    local ui = require('render-markdown.core.ui')
+    local widths = {} ---@type render.md.test.OverlayInfo[]
+    for _, row in ipairs(rows) do
+        local marks = vim.api.nvim_buf_get_extmarks(
+            0,
+            ui.ns,
+            { row, 0 },
+            { row, -1 },
+            { details = true }
+        )
+        for _, mark in ipairs(marks) do
+            local details = mark[4]
+            if details.virt_text_pos == 'overlay' and details.virt_text then
+                local text = details.virt_text[1][1]
+                widths[#widths + 1] = {
+                    row = row,
+                    width = vim.fn.strdisplaywidth(text),
+                    text = text,
+                }
+            end
+        end
+    end
+    return widths
+end
+
+---Assert all overlay widths on given rows are equal
+---Compares the maximum overlay width per row (the full row overlay, not individual elements)
+---@param rows integer[]
+function M.assert_overlay_widths_equal(rows)
+    local widths = M.get_overlay_widths(rows)
+    assert(#widths > 0, 'No overlays found')
+
+    -- Group by row and take max width per row (full row overlay)
+    local max_per_row = {} ---@type table<integer, integer>
+    for _, w in ipairs(widths) do
+        max_per_row[w.row] = math.max(max_per_row[w.row] or 0, w.width)
+    end
+
+    -- Compare max widths across rows
+    local first_width = nil
+    for row, width in pairs(max_per_row) do
+        if first_width == nil then
+            first_width = width
+        else
+            assert.equals(
+                first_width,
+                width,
+                ('Row %d max overlay width %d != expected %d'):format(row, width, first_width)
+            )
+        end
+    end
 end
 
 return M
