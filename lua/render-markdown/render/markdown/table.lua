@@ -253,14 +253,17 @@ function Render:build_row_line(row, highlight)
         local delim_col = delim_cols[i]
         local target_width = delim_col.width
 
-        -- Extract cell content from between pipes
-        -- Positions are buffer columns (0-indexed), convert to display columns for str.sub (1-indexed)
+        -- Extract cell content from between pipes. Tree-sitter positions
+        -- are byte columns in the buffer, so use a byte-based substring
+        -- (string.sub) on row.node.text - not str.sub, which interprets
+        -- its arguments as display columns and over-extracts when the
+        -- row contains double-width glyphs (CJK, emoji) whose byte count
+        -- exceeds their display width.
         local row_start = row.node.start_col
         local content_start = row.pipes[i].end_col - row_start + 1
         local content_end = row.pipes[i + 1].start_col - row_start
 
-        -- Extract the cell region (content between pipes, including spaces)
-        local cell_content = str.sub(row.node.text, content_start, content_end)
+        local cell_content = row.node.text:sub(content_start, content_end)
         local cell_width = str.width(cell_content)
 
         -- Pad to match target width (left-align)
