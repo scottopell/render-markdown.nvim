@@ -19,6 +19,13 @@ M.setup = {}
 function M.setup.init(opts)
     require('luassert.assert'):set_parameter('TableFormatLevel', 4)
     require('luassert.assert'):set_parameter('TableErrorHighlightColor', 'none')
+    -- Enable modelines explicitly. nvim disables 'modeline' when
+    -- running as root for security reasons, but several tests load
+    -- fixture files (tests/data/*.md) that rely on a `# vim: ft=...`
+    -- modeline to override the filetype detected from the .md
+    -- extension. Without this the tests fail in CI / containerized
+    -- environments while passing for non-root maintainers.
+    vim.opt.modeline = true
     ---@type render.md.UserConfig
     local test_config = {
         -- debounce=0 so render callbacks run synchronously under
