@@ -21,6 +21,12 @@ function M.setup.init(opts)
     require('luassert.assert'):set_parameter('TableErrorHighlightColor', 'none')
     ---@type render.md.UserConfig
     local test_config = {
+        -- debounce=0 so render callbacks run synchronously under
+        -- vim.wait(0) instead of being held as "pending" until the
+        -- 100ms debounce timer fires. Without this, every test call
+        -- after the first leading-edge render within a session is
+        -- silently queued and never observed.
+        debounce = 0,
         anti_conceal = { enabled = false },
         win_options = { concealcursor = { rendered = 'nvic' } },
         overrides = {
@@ -55,11 +61,16 @@ function M.setup.text(lines, opts)
     vim.wait(0)
 end
 
----Set window view state and trigger re-render
+---Set window view state and trigger re-render. Passes the current buf
+---and win explicitly because render-markdown's api.render resolves an
+---omitted or zero buf argument through vim.fn.win_findbuf, which
+---returns empty for buf=0 and silently skips the update.
 ---@param opts vim.fn.winrestview.dict
 function M.setup.view(opts)
     vim.fn.winrestview(opts)
-    require('render-markdown.api').render({ buf = 0 })
+    local buf = vim.api.nvim_get_current_buf()
+    local win = vim.api.nvim_get_current_win()
+    require('render-markdown.api').render({ buf = buf, win = win })
     vim.wait(0)
 end
 

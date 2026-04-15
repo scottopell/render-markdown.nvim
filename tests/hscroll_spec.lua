@@ -95,20 +95,29 @@ describe('horizontal scroll', function()
             assert(#widths > 0, 'Table should have overlay marks at leftcol 0')
         end)
 
-        it('delimiter row consistent across scroll positions', function()
+        it('delimiter row shrinks by leftcol when scrolled', function()
+            -- When a table is horizontally scrolled, the delimiter
+            -- overlay is clipped on the left by `leftcol` columns, so
+            -- the visible width should equal (base_width - leftcol) for
+            -- every scroll position until the whole row is clipped.
             util.setup.text(table_md)
-            -- Check delimiter row (row 1) overlay width at different positions
-            local widths_at_0 = nil
-            for _, lc in ipairs({ 0, 5, 10, 15, 20 }) do
+            util.setup.view({ leftcol = 0 })
+            local base = util.get_overlay_widths({ 1 })
+            local base_width = base[1] and base[1].width
+            assert(base_width, 'no delimiter overlay at leftcol 0')
+
+            for _, lc in ipairs({ 5, 10, 15, 20 }) do
                 util.setup.view({ leftcol = lc })
-                local widths = util.get_overlay_widths({ 1 }) -- delimiter row only
-                if lc == 0 then
-                    widths_at_0 = widths[1] and widths[1].width
-                elseif widths_at_0 and widths[1] then
+                local widths = util.get_overlay_widths({ 1 })
+                if widths[1] then
                     assert.equals(
-                        widths_at_0,
+                        math.max(0, base_width - lc),
                         widths[1].width,
-                        ('Delimiter width at leftcol %d differs from leftcol 0'):format(lc)
+                        ('Delimiter width at leftcol %d should be %d - %d'):format(
+                            lc,
+                            base_width,
+                            lc
+                        )
                     )
                 end
             end
