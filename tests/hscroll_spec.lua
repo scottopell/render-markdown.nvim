@@ -125,15 +125,28 @@ describe('horizontal scroll', function()
 
         it('all rows have equal full-line overlay widths when scrolled (proptest)', function()
             -- When leftcol > 0, tables switch to full-line overlay mode
-            -- All rows should have the same overlay width for proper alignment
+            -- and all rows should have the same overlay width.
+            --
+            -- The small table is 28 display columns wide; any leftcol
+            -- that clips the row down below the strict helper's
+            -- min_width=10 filter produces zero observable fullline
+            -- overlays, so the proptest range is clamped to values
+            -- that are guaranteed to leave at least 10 columns
+            -- visible. The earlier form of this test ran [1, 150]
+            -- with the lenient helper, which silently passed ~87% of
+            -- iterations (leftcol >= 20 fully clipped) instead of
+            -- actually testing alignment. CRITICAL_LEFTCOL_RANGE
+            -- {30..40} is also entirely outside the testable range
+            -- for this table, so it is dropped here - the wide table
+            -- below exercises that range.
             local success, err = proptest_integer(
-                { iterations = 50, min = 1, max = 150, critical_range = CRITICAL_LEFTCOL_RANGE },
+                { iterations = 50, min = 1, max = 17 },
                 function()
                     util.setup.text(table_md)
                 end,
                 function(leftcol)
                     util.setup.view({ leftcol = leftcol })
-                    util.assert_fullline_widths_equal({ 0, 1, 2, 3 })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3 })
                 end
             )
             assert(success, err)
@@ -148,15 +161,18 @@ describe('horizontal scroll', function()
         }
 
         it('wide table rows aligned when scrolled (proptest)', function()
-            -- Wide tables with varying cell content are more likely to expose alignment bugs
+            -- 64 display columns wide; clamp to leftcol 1..53 so the
+            -- trim always leaves at least 10 columns for the strict
+            -- helper's min_width filter. This range still covers the
+            -- historic bug range CRITICAL_LEFTCOL_RANGE {30..40}.
             local success, err = proptest_integer(
-                { iterations = 50, min = 1, max = 100, critical_range = CRITICAL_LEFTCOL_RANGE },
+                { iterations = 50, min = 1, max = 53, critical_range = CRITICAL_LEFTCOL_RANGE },
                 function()
                     util.setup.text(wide_table_md)
                 end,
                 function(leftcol)
                     util.setup.view({ leftcol = leftcol })
-                    util.assert_fullline_widths_equal({ 0, 1, 2, 3 })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3 })
                 end
             )
             assert(success, err)

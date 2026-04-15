@@ -80,37 +80,9 @@ local function proptest_integer(opts, setup_fn, property_fn)
     return true, nil
 end
 
----Strict version of util.assert_fullline_widths_equal. The standard
----helper early-returns when fewer than 2 full-line overlays exist, which
----silently masks a rendering regression (zero overlays looks identical
----to "passed"). This helper requires at least 2 overlays to compare.
----@param rows integer[]
----@param min_width? integer
-local function assert_fullline_widths_strict(rows, min_width)
-    local widths = util.get_fullline_overlay_widths(rows, min_width or 10)
-    local count = vim.tbl_count(widths)
-    assert(
-        count >= 2,
-        ('expected >= 2 fullline overlays across rows, got %d'):format(count)
-    )
-    local first_width, first_row
-    for row, width in pairs(widths) do
-        if first_width == nil then
-            first_width, first_row = width, row
-        else
-            assert.equals(
-                first_width,
-                width,
-                ('row %d width %d != row %d width %d'):format(
-                    row,
-                    width,
-                    first_row,
-                    first_width
-                )
-            )
-        end
-    end
-end
+-- Strict fullline widths assertion lives in tests/util.lua as
+-- M.assert_fullline_widths_strict (shared with tests/hscroll_spec.lua).
+local assert_fullline_widths_strict = util.assert_fullline_widths_strict
 
 local CRITICAL_LEFTCOL_RANGE = {}
 for i = 30, 40 do

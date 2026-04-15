@@ -585,6 +585,13 @@ end
 ---Assert that all full-line overlays have equal widths
 ---Only compares rows that have full-line overlays (width >= min_width)
 ---This is useful for testing scrolled tables where all rows should use full-line overlay mode
+---
+---WARNING: this helper silently passes when fewer than 2 full-line
+---overlays exist. For scrolled-table alignment tests where marks are
+---EXPECTED to exist, prefer assert_fullline_widths_strict which
+---fails on "no overlays found" rather than returning green. The
+---lenient form is kept for leftcol=0 or fully-clipped cases where
+---the absence of overlays is correct.
 ---@param rows integer[]
 ---@param min_width? integer Minimum width to consider (default 10)
 function M.assert_fullline_widths_equal(rows, min_width)
@@ -602,6 +609,44 @@ function M.assert_fullline_widths_equal(rows, min_width)
         if first_width == nil then
             first_width = width
             first_row = row
+        else
+            assert.equals(
+                first_width,
+                width,
+                ('Row %d full-line overlay width %d != row %d width %d'):format(
+                    row,
+                    width,
+                    first_row,
+                    first_width
+                )
+            )
+        end
+    end
+end
+
+---Strict version of assert_fullline_widths_equal. Requires at least
+---two full-line overlays (one on its own cannot establish equality)
+---and fails the test instead of returning green when fewer exist.
+---
+---Use this for scrolled-table alignment assertions where the tested
+---range is guaranteed to produce overlays on every row. Using the
+---lenient form in those cases silently passes for any leftcol large
+---enough to fully clip the table, turning the assertion into a
+---no-op. The existing hscroll_spec proptests were exactly that
+---shape until this helper was introduced.
+---@param rows integer[]
+---@param min_width? integer Minimum width to consider (default 10)
+function M.assert_fullline_widths_strict(rows, min_width)
+    local widths = M.get_fullline_overlay_widths(rows, min_width or 10)
+    local count = vim.tbl_count(widths)
+    assert(
+        count >= 2,
+        ('expected >= 2 fullline overlays across rows, got %d'):format(count)
+    )
+    local first_width, first_row
+    for row, width in pairs(widths) do
+        if first_width == nil then
+            first_width, first_row = width, row
         else
             assert.equals(
                 first_width,
