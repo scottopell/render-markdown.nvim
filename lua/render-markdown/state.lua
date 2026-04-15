@@ -1,4 +1,5 @@
 local Config = require('render-markdown.lib.config')
+local buffer_state = require('render-markdown.lib.buffer_state')
 
 ---@class render.md.State
 ---@field private config render.md.Config
@@ -20,8 +21,15 @@ local Config = require('render-markdown.lib.config')
 local M = {}
 
 ---@private
----@type table<integer, render.md.buf.Config>
-M.cache = {}
+---Per-buffer config cache. Lifetime tied to the buffer via
+---buffer_state's on_detach hook; there is no manual cleanup path.
+---@type render.md.buffer_state.Store
+M._store = buffer_state.define_cache('state', {
+    make = function(buf, custom)
+        return Config.new(M.config, M.enabled, buf, custom)
+    end,
+    destroy = function(_) end, -- plain config table, nothing to release
+})
 
 ---called from init on setup
 ---@param config render.md.Config
@@ -43,8 +51,10 @@ function M.setup(config)
     M.completions = config.completions
     M.custom_handlers = config.custom_handlers
 
-    -- reset cache
-    M.cache = {}
+    -- reset buffer-scoped state (per-buffer config, decorator, context,
+    -- attached list). Centralized via buffer_state._reset_all so a
+    -- future new per-buffer cache does not need to be remembered here.
+    buffer_state._reset_all()
 
     require('render-markdown.core.ts').setup()
     require('render-markdown.core.ui').setup()
@@ -54,10 +64,7 @@ end
 ---@param custom? render.md.partial.UserConfig
 ---@return render.md.buf.Config
 function M.get(buf, custom)
-    if not M.cache[buf] then
-        M.cache[buf] = Config.new(M.config, M.enabled, buf, custom)
-    end
-    return assert(M.cache[buf], 'missing buffer config')
+    return M._store:get(buf, custom)
 end
 
 function M.attach()
@@ -81,9 +88,9 @@ function M.modify_anti_conceal(amount)
         config.below = math.max(config.below + amount, 0)
     end
     modify(M.config.anti_conceal)
-    for _, config in pairs(M.cache) do
+    M._store:for_each(function(_, config)
         modify(config.anti_conceal)
-    end
+    end)
 end
 
 ---@return table?

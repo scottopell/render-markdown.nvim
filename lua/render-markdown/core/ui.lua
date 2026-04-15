@@ -1,4 +1,5 @@
 local Context = require('render-markdown.request.context')
+local buffer_state = require('render-markdown.lib.buffer_state')
 local compat = require('render-markdown.lib.compat')
 local env = require('render-markdown.lib.env')
 local iter = require('render-markdown.lib.iter')
@@ -11,27 +12,39 @@ local M = {}
 M.ns = vim.api.nvim_create_namespace('render-markdown.nvim')
 
 ---@private
----@type table<integer, render.md.Decorator>
-M.cache = {}
+---Per-buffer decorator cache. The Decorator owns a uv_timer which
+---must be stopped AND closed when the entry is dropped, otherwise
+---libuv keeps a reference to it and the callback closure lives on.
+---This destructor runs automatically via buffer_state's on_detach
+---hook when nvim deletes the buffer.
+---@type render.md.buffer_state.Store
+M._store = buffer_state.define_cache('decorator', {
+    make = function(buf)
+        return require('render-markdown.lib.decorator').new(buf)
+    end,
+    destroy = function(decorator)
+        if decorator.timer then
+            pcall(decorator.timer.stop, decorator.timer)
+            pcall(decorator.timer.close, decorator.timer)
+        end
+    end,
+})
 
 ---called from state on setup
 function M.setup()
-    -- clear marks and reset cache
+    -- clear marks across every valid buffer so a prior render's
+    -- overlays do not leak visually into the new configuration
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         vim.api.nvim_buf_clear_namespace(buf, M.ns, 0, -1)
     end
-    M.cache = {}
+    -- the decorator store itself is wiped centrally by state.setup
+    -- via buffer_state._reset_all (see state.lua)
 end
 
 ---@param buf integer
 ---@return render.md.Decorator
 function M.get(buf)
-    local result = M.cache[buf]
-    if not result then
-        result = require('render-markdown.lib.decorator').new(buf)
-        M.cache[buf] = result
-    end
-    return result
+    return M._store:get(buf)
 end
 
 ---@param buf integer
