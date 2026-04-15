@@ -1,0 +1,373 @@
+-- allium: 3
+-- horizontal-scroll.allium
+
+-- Scope: Horizontal-scroll-aware rendering of pipe tables
+-- Includes:
+--   - Table geometry (delimiter and row column widths measured in display columns)
+--   - Re-render triggers when the viewing window's horizontal scroll changes
+--   - Trim/clip behaviour applied to delimiter and row overlays when scrolled
+--   - Debounced render pipeline (leading + trailing edge) that issues overlays
+--   - Invariants that guarantee visual alignment between rows and the delimiter
+-- Excludes:
+--   - Markdown parsing (tree-sitter, handled upstream)
+--   - The neovim extmark / virtual-text API itself (treated as an output sink)
+--   - Non-table rendering (headings, code blocks, horizontal rules, lists)
+--   - Cell-mode configuration as a feature (only referenced where it interacts
+--     with horizontal scroll)
+--   - Anti-conceal refresh policy (see separate spec)
+
+------------------------------------------------------------
+-- External Entities
+------------------------------------------------------------
+
+-- The editor window that observes the buffer. Horizontal scroll offset and
+-- visible width are the only properties this spec cares about.
+external entity Window {
+    leftcol: Integer
+    width: Integer
+    topline: Integer
+}
+
+-- The buffer whose contents are being rendered. Only the change tick is used
+-- as a freshness token.
+external entity Buffer {
+    changedtick: Integer
+}
+
+-- Rendered output sink. Every visual overlay this spec produces is an
+-- Extmark placed on the buffer by the runtime. Treated as fire-and-forget.
+external entity Extmark {
+    buffer: Buffer
+    row: Integer
+    col: Integer
+    text: String
+    full_line: Boolean
+}
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+-- A single rendered cell inside a data row. Positions are byte columns
+-- (from the parser), but display_width is measured in display columns so
+-- that double-width glyphs (CJK, emoji) are counted correctly.
+value Cell {
+    start_col: Integer
+    end_col: Integer
+    display_width: Integer
+}
+
+-- A single column of the delimiter (`---`) row. Its width is the common
+-- width shared by every data row's cell in that column, so that rows and
+-- delimiter stay visually aligned.
+value DelimCol {
+    width: Integer
+    alignment: left | center | right | default
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+enum DecoratorState { idle | running }
+
+------------------------------------------------------------
+-- Entities and Variants
+------------------------------------------------------------
+
+-- The delimiter row of a pipe table. Carries the authoritative per-column
+-- widths that every data row must conform to when rendered.
+entity DelimRow {
+    node_start_col: Integer
+    cols: List<DelimCol>
+
+    -- Total display width of the delimiter once rendered, including the
+    -- outer pipes and the per-column fill. This is the reference width all
+    -- rows must match (see invariant AllRowsMatchDelimiterWidth).
+    rendered_width: Integer
+}
+
+-- A data row of a pipe table. Holds the original cells with their measured
+-- display widths; when rendered under horizontal scroll, each cell is
+-- re-fitted to the corresponding DelimCol width.
+entity Row {
+    owner: Table
+    node_start_col: Integer
+    cols: List<Cell>
+}
+
+-- A pipe table: a delimiter row plus zero or more data rows. Identity is
+-- the table node in the buffer. Note that the rendered width of a row is
+-- reconstructed from delimiter column widths (not raw cell widths) so
+-- every row visually matches the delimiter; see rule RenderRowWhenScrolled
+-- and invariant AllRowsMatchDelimiterWidth.
+entity Table {
+    buffer: Buffer
+    delim: DelimRow
+    rows: Row with owner = this
+}
+
+-- The per-window cache of the last scroll offset observed. A change to any
+-- visible window's leftcol invalidates the view and causes a re-render.
+entity View {
+    buffer: Buffer
+    cached_leftcol: Integer
+}
+
+-- Debouncer that coalesces render requests for a buffer. Leading-edge: the
+-- first request executes immediately and enters `running`. Trailing-edge:
+-- a single pending request captured during `running` is flushed when the
+-- timer expires; further arrivals overwrite the pending slot.
+entity Decorator {
+    buffer: Buffer
+    state: DecoratorState
+    last_tick: Integer
+    has_pending: Boolean
+    timer_started_at: Timestamp?
+
+    transitions state {
+        idle -> running
+        running -> idle
+        terminal: idle
+    }
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    -- The trailing-edge window during which further render requests are
+    -- coalesced into a single pending invocation. The exact duration is
+    -- tuning; what matters at the domain level is that a window exists.
+    debounce_window: Duration = 200.milliseconds
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+-- I. Table setup. When a Table is created its DelimRow must already carry
+-- per-column widths that dominate every data row's corresponding cell
+-- display width. The property is asserted via invariant
+-- DelimColWidthIsMaxCellWidth; this rule exists to tie that property to
+-- the creation point and to emit a render request.
+rule RegisterTable {
+    when: table: Table.created
+    ensures: RenderRequested(buffer: table.buffer)
+}
+
+-- II. Scroll change detection. The View caches the maximum leftcol across
+-- all windows showing the buffer; if any window's leftcol differs from the
+-- cache, the view is stale and a render is requested.
+rule DetectScrollChange {
+    when: WindowScrolled(window, buffer)
+
+    let view = View{buffer: buffer}
+    requires: exists view
+    requires: window.leftcol != view.cached_leftcol
+
+    ensures: view.cached_leftcol = window.leftcol
+    ensures: RenderRequested(buffer: buffer)
+}
+
+-- III. Delimiter rendering when scrolled. Compute the trim amount by
+-- clipping the delimiter's node start against the window leftcol; if any
+-- of the delimiter is still visible, emit a full-line overlay at column
+-- leftcol containing the delimiter text from trim_amount onwards.
+rule RenderDelimWhenScrolled {
+    when: RenderTable(table, window)
+    requires: window.leftcol > 0
+
+    let trim_amount = max_zero(window.leftcol - table.delim.node_start_col)
+    requires: trim_amount < table.delim.rendered_width
+
+    ensures: Extmark.created(
+        buffer: table.buffer,
+        row: delim_row_of(table),
+        col: window.leftcol,
+        text: clipped_delim_text(table.delim, trim_amount),
+        full_line: true
+    )
+}
+
+-- IV. Row rendering when scrolled. A row is reconstructed using the
+-- delimiter's column widths (not the raw row widths), then clipped by the
+-- same trim rule so it visually matches the delimiter.
+rule RenderRowWhenScrolled {
+    when: RenderTable(table, window)
+    requires: window.leftcol > 0
+    ensures:
+        for row in table.rows:
+            let trim_amount = max_zero(window.leftcol - row.node_start_col)
+            if trim_amount < table.delim.rendered_width:
+                Extmark.created(
+                    buffer: table.buffer,
+                    row: row_line_of(row),
+                    col: window.leftcol,
+                    text: clipped_row_text(row, table.delim, trim_amount),
+                    full_line: true
+                )
+}
+
+-- V. Rendering when the buffer is not horizontally scrolled. Instead of
+-- full-line overlays the normal path emits per-pipe and per-cell alignment
+-- marks (the domain property is: two rendering strategies exist, selected
+-- by whether leftcol is zero).
+rule RenderTableUnscrolled {
+    when: RenderTable(table, window)
+    requires: window.leftcol = 0
+    ensures:
+        for row in table.rows:
+            for cell in row.cols:
+                Extmark.created(
+                    buffer: table.buffer,
+                    row: row_line_of(row),
+                    col: cell.start_col,
+                    text: alignment_text(table.delim, cell),
+                    full_line: false
+                )
+}
+
+-- VI. Borders. A top border above the first row and a bottom border below
+-- the last row are only drawn when every row is the same rendered width as
+-- the delimiter; otherwise borders are suppressed.
+rule RenderTableBorders {
+    when: RenderTable(table, window)
+    requires: width_equal(table)
+    ensures: Extmark.created(
+        buffer: table.buffer,
+        row: top_border_line(table),
+        col: 0,
+        text: top_border_text(table),
+        full_line: false
+    )
+    ensures: Extmark.created(
+        buffer: table.buffer,
+        row: bottom_border_line(table),
+        col: 0,
+        text: bottom_border_text(table),
+        full_line: false
+    )
+}
+
+-- VII. Debounce: leading edge. A render request that arrives while the
+-- decorator is idle fires immediately, transitions the decorator to
+-- running, and arms the debounce timer.
+rule DebounceLeadingEdge {
+    when: RenderRequested(buffer)
+
+    let decorator = Decorator{buffer: buffer}
+    requires: exists decorator
+    requires: decorator.state = idle
+
+    ensures: decorator.state = running
+    ensures: decorator.timer_started_at = now
+    ensures: decorator.has_pending = false
+    ensures: RenderTableBatch(buffer: buffer)
+}
+
+-- VIII. Debounce: request during running. A request that arrives while
+-- running is not executed; it is latched as a single pending request and
+-- the timer is restarted so the trailing-edge window covers it.
+rule DebounceCaptureWhileRunning {
+    when: RenderRequested(buffer)
+
+    let decorator = Decorator{buffer: buffer}
+    requires: exists decorator
+    requires: decorator.state = running
+
+    ensures: decorator.has_pending = true
+    ensures: decorator.timer_started_at = now
+}
+
+-- IX. Debounce: timer expiry with a pending request. The pending render is
+-- executed, the pending flag is cleared, and the timer is restarted to
+-- open a fresh trailing-edge window in case another request races in.
+rule DebounceFlushPending {
+    when: decorator: Decorator.timer_started_at + config.debounce_window <= now
+    requires: decorator.state = running
+    requires: decorator.has_pending = true
+
+    ensures: decorator.has_pending = false
+    ensures: decorator.timer_started_at = now
+    ensures: RenderTableBatch(buffer: decorator.buffer)
+}
+
+-- X. Debounce: timer expiry with no pending request. The decorator returns
+-- to idle, completing the debounce cycle.
+rule DebounceIdle {
+    when: decorator: Decorator.timer_started_at + config.debounce_window <= now
+    requires: decorator.state = running
+    requires: decorator.has_pending = false
+
+    ensures: decorator.state = idle
+    ensures: decorator.timer_started_at = null
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+-- I1. Every data row rendered under horizontal scroll ends up the same
+-- display width as the delimiter. This is the central alignment property;
+-- the fix in commit 92b6fd5 exists to preserve it.
+invariant AllRowsMatchDelimiterWidth {
+    for table in Tables:
+        for row in table.rows:
+            rendered_width_of(row, table.delim) = table.delim.rendered_width
+}
+
+-- I2. Each delimiter column's width is at least the maximum display width
+-- of the corresponding cell across every data row, so rendered rows never
+-- have to overflow a column.
+invariant DelimColWidthIsMaxCellWidth {
+    for table in Tables:
+        for col in table.delim.cols:
+            col.width >= max_cell_display_width(table, col)
+}
+
+-- I3. The trim amount applied when clipping to leftcol is never negative.
+-- Captured as the domain counterpart of the `max(0, ...)` in the code.
+invariant TrimAmountNonNegative {
+    for table in Tables:
+        for w in Windows:
+            max_zero(w.leftcol - table.delim.node_start_col) >= 0
+}
+
+-- I4. If the scroll offset has clipped an overlay beyond its source width,
+-- no extmark is emitted for that overlay. Captured as: the visible slice
+-- of a clipped region is never longer than the source; equivalently, the
+-- remaining width after clipping is always non-negative and monotone.
+invariant NoOverlayWhenFullyClipped {
+    for table in Tables:
+        for w in Windows where w.leftcol > 0:
+            let trim = max_zero(w.leftcol - table.delim.node_start_col)
+            trim >= table.delim.rendered_width
+                implies visible_slice_width(table.delim, trim) = 0
+}
+
+-- I5. All width calculations used by this spec are measured in display
+-- columns (which count CJK and emoji as 2), never in raw byte lengths.
+-- This is the property behind the use of strdisplaywidth in the code.
+invariant DoubleWidthAware {
+    for table in Tables:
+        for row in table.rows:
+            for cell in row.cols:
+                cell.display_width = display_width_of(cell)
+}
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+open question "Combining characters / zero-width joiners in cells (U+200D, combining diacritics): unclear if display-width measurement handles all of these correctly"
+open question "Tabs inside cells: display width depends on the effective tabstop; behaviour is untested"
+open question "Header-only table (single delimiter row, no data rows): table setup may fail when indexing the last row"
+open question "Scroll offset that lands exactly on a pipe boundary: is the pipe rendered or clipped?"
+open question "Scroll offset equal to the row's node_start_col (trim_amount = 0 edge): should the overlay be emitted at all?"
+open question "Rapid scroll during the debounce window: leading executes, intermediate states are skipped, only the trailing edge renders - is this the intended UX?"
+open question "Window width change during the debounce window: does the decorator re-measure or render with stale width?"
+open question "Scroll without cursor movement: does anti-conceal refresh correctly for the currently concealed line?"
+open question "Insert mode entered mid-debounce: the render_modes set may disagree between leading and trailing render - what is the correct resolution?"
+open question "Horizontal scroll combined with buffer-level indentation (e.g. list item continuation): the interaction is untested"
