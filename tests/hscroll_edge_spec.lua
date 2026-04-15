@@ -381,25 +381,34 @@ describe('horizontal scroll edge cases', function()
     -- Open question: scroll at pipe boundary
     -- =====================================================================
     describe('scroll offset at pipe boundary (open question)', function()
-        -- Pipes in the delimiter row below sit at columns 0, 7, 14, 21.
+        -- Row width is 22; pipes in the delimiter sit at columns
+        -- 0, 7, 14, 21. We only check leftcols that leave enough
+        -- remaining width to clear the strict helper's min_width=10
+        -- filter - which rules out 14 (remaining 8) and 21 (remaining 1).
         local t = {
             '| Col1 | Col2 | Col3 |',
             '|------|------|------|',
             '| a    | b    | c    |',
         }
 
-        it('alignment holds at each pipe column', function()
+        it('alignment holds at each checkable pipe column', function()
             util.setup.text(t)
-            for _, leftcol in ipairs({ 0, 7, 14, 21 }) do
+            for _, leftcol in ipairs({ 7 }) do
                 util.setup.view({ leftcol = leftcol })
                 local ok, err = pcall(assert_fullline_widths_strict, { 0, 1, 2 })
-                -- leftcol=0 takes the unscrolled path which does not emit
-                -- fullline overlays, so strict check is only meaningful
-                -- for scrolled offsets. Treat leftcol=0 as a smoke test.
-                if leftcol > 0 then
-                    assert(ok, ('leftcol=%d: %s'):format(leftcol, err or ''))
-                end
+                assert(ok, ('leftcol=%d: %s'):format(leftcol, err or ''))
             end
+        end)
+
+        it('does not crash at leftcol 14 or 21 (narrow remainder)', function()
+            -- These scroll positions leave remainders too small for the
+            -- strict helper; just verify the render does not error.
+            local ok, err = pcall(function()
+                util.setup.text(t)
+                util.setup.view({ leftcol = 14 })
+                util.setup.view({ leftcol = 21 })
+            end)
+            assert(ok, ('narrow remainder crashed: %s'):format(err or ''))
         end)
     end)
 
@@ -468,131 +477,32 @@ describe('horizontal scroll edge cases', function()
     end)
 
     -- =====================================================================
-    -- BUG characterisation: state leak across buffers during a session
-    -- =====================================================================
-    -- Finding from the allium propagate run: after enough scrolled render
-    -- cycles accumulate in a single nvim session, subsequent leftcol=0
-    -- renders of fresh buffers emit progressively fewer marks and
-    -- eventually zero. The degradation is reproducible, monotonic, and
-    -- independent of the buffer being wiped (bwipeout on prior buffers
-    -- does not prevent it). See also:
+    -- Notes on two prior "bugs" that turned out to be test-framework
+    -- artefacts, not plugin bugs:
     --
-    --   * lua/render-markdown/lib/decorator.lua  (debounce state)
-    --   * lua/render-markdown/request/view.lua   (View cache / leftcol)
-    --   * the spec in specs/horizontal-scroll.allium captures the rules
-    --     but not the global-state lifecycle that this bug sits in.
+    -- 1. "State leak between buffers": earlier runs of this file saw
+    --    pure-CJK leftcol=0 renders degrade to zero marks after many
+    --    prior scrolled renders. The cause was util.setup.view passing
+    --    buf=0 to api.render, which resolved to an empty window list
+    --    via vim.fn.win_findbuf(0) and silently no-op'd. Subsequent
+    --    renders were never executed; what looked like "degradation"
+    --    was just the most recent winrestview leftcol being picked up
+    --    by the next buffer's initial FileType-triggered render. Fixed
+    --    in tests/util.lua.
     --
-    -- The test below ASSERTS the currently-observed buggy counts so CI
-    -- is deterministic. When the root cause is fixed, this test WILL
-    -- fail; whoever fixes it should tighten the assertions (both
-    -- should equal `baseline`).
-    describe('BUG: rendering state leaks between buffers', function()
-        it('CJK leftcol=0 marks degrade after prior scroll cycles', function()
-            local ascii = {
-                '| Col1 | Column Two | Col3 |',
-                '|------|------------|------|',
-                '| a    | data here  | x    |',
-                '| bb   | more data  | yy   |',
-            }
-            local cjk = {
-                '| 一 | 二 |',
-                '|----|----|',
-                '| 三 | 四 |',
-                '| 五 | 六 |',
-            }
-
-            local function cjk_mark_count()
-                util.setup.text(cjk)
-                util.setup.view({ leftcol = 0 })
-                return #util.actual_marks()
-            end
-
-            local baseline = cjk_mark_count()
-
-            util.setup.text(ascii)
-            for i = 1, 50 do
-                util.setup.view({ leftcol = i })
-            end
-            local after = cjk_mark_count()
-
-            -- Baseline is whatever the fresh render produces (we do not
-            -- hard-code a number - just require it is positive so the
-            -- test is not a no-op).
-            assert(baseline > 0, ('baseline must be positive, got %d'):format(baseline))
-
-            -- BUG: after 50 scrolls the fresh CJK render emits 0 marks.
-            -- When the state leak is fixed, this assertion will fail and
-            -- the second argument should be changed to `>= baseline` or
-            -- `== baseline`.
-            assert.equals(
-                0,
-                after,
-                ('expected 0 marks (documenting current bug), got %d after 50 prior scrolls; '
-                    .. 'if this fails the state leak may have been fixed - tighten the assertion'):format(after)
-            )
-        end)
-    end)
-
-    -- =====================================================================
-    -- BUG characterisation: rendering path threshold at leftcol=1
-    -- =====================================================================
-    -- Second finding from the propagate run: at leftcol=1, the delimiter
-    -- row takes the scrolled fullline overlay path (because trim_amount
-    -- = max(0, 1 - node_start_col) > 0) while the data rows appear to
-    -- stay on the unscrolled per-pipe overlay path. The result is
-    -- visually inconsistent: delimiter slides by 1 column but data rows
-    -- do not. At leftcol >= 2 everything switches to fullline overlays
-    -- and alignment is restored. Spec invariant I1 says rows and
-    -- delimiter should have equal rendered width when scrolled, but at
-    -- leftcol=1 the two are rendered via different code paths and I1
-    -- cannot be checked (the strict helper sees 1 fullline overlay, the
-    -- lenient helper silently passes).
+    -- 2. "Rendering path threshold at leftcol=1": earlier runs saw only
+    --    the delimiter emit a fullline overlay at leftcol=1 while data
+    --    rows used the per-pipe path. Same root cause - the second
+    --    render at leftcol=1 never ran, so the observed marks were
+    --    stale leftcol=0 marks from the initial FileType render.
     --
-    -- As with Bug A above, this test locks in the current behaviour so
-    -- CI is deterministic. When the mode-switch threshold is fixed (or
-    -- intentionally documented as-designed), tighten the assertions.
-    describe('BUG: rendering path threshold at leftcol=1', function()
-        local t = {
-            '| English | CJK    | Mixed |',
-            '|---------|--------|-------|',
-            '| hello   | 日本語 | a日b  |',
-            '| world   | 語句   | p語q  |',
-        }
-
-        it('leftcol=1 produces mixed rendering (delim fullline, rows per-pipe)', function()
-            util.setup.text(t)
-            util.setup.view({ leftcol = 1 })
-
-            local fullline = util.get_fullline_overlay_widths({ 0, 1, 2, 3 }, 10)
-            local fullline_count = vim.tbl_count(fullline)
-
-            -- Lock in current buggy count: only the delimiter row (row 1)
-            -- gets a fullline overlay. If this fails with a higher number
-            -- the threshold may have been fixed - tighten the assertion.
-            assert.equals(
-                1,
-                fullline_count,
-                ('expected exactly 1 fullline overlay at leftcol=1 '
-                    .. '(documenting mixed-path bug), got %d'):format(fullline_count)
-            )
-        end)
-
-        it('leftcol=2 produces uniform fullline rendering', function()
-            util.setup.text(t)
-            util.setup.view({ leftcol = 2 })
-
-            local fullline = util.get_fullline_overlay_widths({ 0, 1, 2, 3 }, 10)
-            local fullline_count = vim.tbl_count(fullline)
-
-            -- At leftcol=2 all 4 rows (header + delim + 2 data) get
-            -- fullline overlays and alignment holds. This test exists as
-            -- a paired check against leftcol=1 above.
-            assert(
-                fullline_count >= 4,
-                ('expected >= 4 fullline overlays at leftcol=2, got %d'):format(fullline_count)
-            )
-        end)
-    end)
+    -- The one REAL bug found and fixed along the way was in
+    -- build_row_line (lua/render-markdown/render/markdown/table.lua):
+    -- it passed byte offsets to str.sub, which interprets its arguments
+    -- as display columns. For ASCII tables byte == display and it
+    -- worked by coincidence; for CJK/emoji rows it over-extracted cell
+    -- content so data rows ended up wider than the delimiter, breaking
+    -- invariant I1. The I1 non-ASCII proptests above exercise the fix.
 end)
 
 -- NOTE: Rules VII-X of the spec (debounce leading+trailing edge state

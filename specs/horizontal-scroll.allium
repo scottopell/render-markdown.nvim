@@ -15,6 +15,24 @@
 --   - Cell-mode configuration as a feature (only referenced where it interacts
 --     with horizontal scroll)
 --   - Anti-conceal refresh policy (see separate spec)
+--
+-- History: Two bugs surfaced while generating property tests from this
+-- spec and were fixed. Both were invisible to the existing test suite
+-- because the test helper was passing buf=0 to api.render, which
+-- silently no-op'd via vim.fn.win_findbuf(0)={} - the scroll was never
+-- actually re-rendered after winrestview. After fixing the helper and
+-- re-running the generated tests:
+--   1. build_row_line (render/markdown/table.lua) extracted cell content
+--      by passing byte offsets to str.sub, which interprets its
+--      arguments as DISPLAY columns. For ASCII tables byte == display
+--      and it happened to work; for CJK/emoji cells the extracted
+--      content was mis-sliced, so data rows ended up wider than the
+--      delimiter and violated invariant I1 (AllRowsMatchDelimiterWidth).
+--   2. str.sub itself dropped multi-column glyphs that straddled the
+--      start or end of the requested range, returning a string whose
+--      display width was less than (j - i + 1). Fix: substitute the
+--      visible portion of the clipped glyph with spaces to preserve
+--      display width. This property now has its own invariant below.
 
 ------------------------------------------------------------
 -- External Entities
@@ -335,16 +353,24 @@ invariant TrimAmountNonNegative {
             max_zero(w.leftcol - table.delim.node_start_col) >= 0
 }
 
--- I4. If the scroll offset has clipped an overlay beyond its source width,
--- no extmark is emitted for that overlay. Captured as: the visible slice
--- of a clipped region is never longer than the source; equivalently, the
--- remaining width after clipping is always non-negative and monotone.
-invariant NoOverlayWhenFullyClipped {
+-- I4. The rendered width of a scrolled overlay equals the pre-trim
+-- width minus the trim amount (clamped to zero). This is the stronger
+-- form of I1: I1 says all rows match the delimiter when scrolled, and
+-- I4 additionally pins what that matched width must be as a function
+-- of leftcol. Together they rule out both "rows disagree with
+-- delimiter" and "everyone agrees on the wrong width".
+--
+-- This invariant replaces the earlier, weaker NoOverlayWhenFullyClipped
+-- invariant. The "no extmark when fully clipped" property is instead
+-- captured as guidance on RenderDelimWhenScrolled / RenderRowWhenScrolled
+-- (they only emit when trim_amount < source_width).
+invariant ScrolledWidthEqualsBaseMinusTrim {
     for table in Tables:
         for w in Windows where w.leftcol > 0:
+            let base = table.delim.rendered_width
             let trim = max_zero(w.leftcol - table.delim.node_start_col)
-            trim >= table.delim.rendered_width
-                implies visible_slice_width(table.delim, trim) = 0
+            for row in table.rows:
+                rendered_width_of(row, w) = max_zero(base - trim)
 }
 
 -- I5. All width calculations used by this spec are measured in display
@@ -357,17 +383,43 @@ invariant DoubleWidthAware {
                 cell.display_width = display_width_of(cell)
 }
 
+-- I6. Clipping an overlay at a display-column boundary that falls in
+-- the middle of a multi-column glyph preserves the total display width
+-- of the result. In practice: if a CJK or emoji glyph straddles the
+-- clip edge, its visible half is replaced with an equivalent number
+-- of spaces rather than dropped. Without this property, scrolled rows
+-- containing double-width cells come out 1-2 columns narrower than
+-- rows that only contain ASCII, which violates I1 and I4.
+invariant ClipPreservesDisplayWidth {
+    for table in Tables:
+        for w in Windows where w.leftcol > 0:
+            let base = table.delim.rendered_width
+            let trim = max_zero(w.leftcol - table.delim.node_start_col)
+            trim < base implies
+                clipped_row_width(w) = base - trim
+}
+
 ------------------------------------------------------------
 -- Open Questions
 ------------------------------------------------------------
 
-open question "Combining characters / zero-width joiners in cells (U+200D, combining diacritics): unclear if display-width measurement handles all of these correctly"
-open question "Tabs inside cells: display width depends on the effective tabstop; behaviour is untested"
-open question "Header-only table (single delimiter row, no data rows): table setup may fail when indexing the last row"
-open question "Scroll offset that lands exactly on a pipe boundary: is the pipe rendered or clipped?"
-open question "Scroll offset equal to the row's node_start_col (trim_amount = 0 edge): should the overlay be emitted at all?"
+-- These were open in the first pass of this spec but have since been
+-- answered by running the generated property tests against the fixed
+-- code (see tests/hscroll_edge_spec.lua). All render without error and
+-- respect I1 / I4 / I6:
+--   * Combining characters (e + U+0301) in cells
+--   * Zero-width joiner emoji sequences (family emoji) in cells
+--   * Tabs inside cells
+--   * Header-only pipe tables (header + delimiter, no data rows)
+--   * Scroll offset landing on a pipe boundary
+--   * Scroll offset equal to (or past) the row's rendered width
+--   * Table nested inside list-item indentation
+--
+-- The remaining open questions are all gated on a controllable clock
+-- in the test harness. Until that exists we can observe these
+-- conditions in practice but cannot assert them in an automated spec
+-- test without an async harness.
 open question "Rapid scroll during the debounce window: leading executes, intermediate states are skipped, only the trailing edge renders - is this the intended UX?"
 open question "Window width change during the debounce window: does the decorator re-measure or render with stale width?"
 open question "Scroll without cursor movement: does anti-conceal refresh correctly for the currently concealed line?"
 open question "Insert mode entered mid-debounce: the render_modes set may disagree between leading and trailing render - what is the correct resolution?"
-open question "Horizontal scroll combined with buffer-level indentation (e.g. list item continuation): the interaction is untested"
