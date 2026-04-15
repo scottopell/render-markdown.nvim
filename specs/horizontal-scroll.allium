@@ -403,10 +403,9 @@ invariant ClipPreservesDisplayWidth {
 -- Open Questions
 ------------------------------------------------------------
 
--- These were open in the first pass of this spec but have since been
--- answered by running the generated property tests against the fixed
--- code (see tests/hscroll_edge_spec.lua). All render without error and
--- respect I1 / I4 / I6:
+-- Resolved in the first follow-up pass (tests/hscroll_edge_spec.lua)
+-- by running property tests against the fixed code. All of the
+-- following render without error and respect I1 / I4 / I6:
 --   * Combining characters (e + U+0301) in cells
 --   * Zero-width joiner emoji sequences (family emoji) in cells
 --   * Tabs inside cells
@@ -415,11 +414,35 @@ invariant ClipPreservesDisplayWidth {
 --   * Scroll offset equal to (or past) the row's rendered width
 --   * Table nested inside list-item indentation
 --
--- The remaining open questions are all gated on a controllable clock
--- in the test harness. Until that exists we can observe these
--- conditions in practice but cannot assert them in an automated spec
--- test without an async harness.
-open question "Rapid scroll during the debounce window: leading executes, intermediate states are skipped, only the trailing edge renders - is this the intended UX?"
-open question "Window width change during the debounce window: does the decorator re-measure or render with stale width?"
-open question "Scroll without cursor movement: does anti-conceal refresh correctly for the currently concealed line?"
-open question "Insert mode entered mid-debounce: the render_modes set may disagree between leading and trailing render - what is the correct resolution?"
+-- Resolved in the second follow-up pass (tests/unit/debounce_spec.lua)
+-- by introducing lib/clock.lua as a time-injection seam and a fake
+-- clock helper (tests/helpers/fake_clock.lua) that advances time
+-- deterministically. The following are observable and behave as
+-- expected:
+--   * Rapid scroll during the debounce window: the leading edge
+--     fires immediately on the first request; subsequent requests
+--     store their callback in the `pending` slot and reset the
+--     trailing timer. When the debounce window elapses with no
+--     further events, the trailing callback fires exactly once
+--     and observes the final scroll position. Intended UX.
+--   * State change during the debounce window (mode, config,
+--     anything Updater:run reads): the trailing callback's
+--     Updater closes over the per-buffer config reference and
+--     re-reads mode/state at run time, so whatever is true when
+--     the trailing edge fires is what the trailing render sees.
+--     The existing test covers this via config.enabled because
+--     headless nvim cannot enter insert mode; the same mechanism
+--     applies to render_modes and the diff mode gate.
+--   * Window width / resize during the debounce window: the
+--     trailing render creates a fresh Context and View, which
+--     both read current window state at render time - same
+--     mechanism as the mode case above.
+--   * Buffer deletion during the debounce window: buffer_state's
+--     on_detach destructor closes the Decorator's uv_timer, so
+--     the trailing callback never fires. The timer_lifetime test
+--     in debounce_spec.lua proves this against the fake clock.
+
+-- The one remaining question does not belong to the debounce
+-- machinery; it is about rendering-pipeline refresh semantics and
+-- is orthogonal to clock control:
+open question "Scroll without cursor movement: does anti-conceal refresh correctly for the currently concealed line? (Not clock-gated; needs a separate scroll-vs-cursor event sequencing test)"
