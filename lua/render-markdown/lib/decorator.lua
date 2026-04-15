@@ -1,4 +1,4 @@
-local compat = require('render-markdown.lib.compat')
+local clock = require('render-markdown.lib.clock')
 
 ---@class render.md.Decorator
 ---@field private buf integer
@@ -16,7 +16,7 @@ Decorator.__index = Decorator
 function Decorator.new(buf)
     local self = setmetatable({}, Decorator)
     self.buf = buf
-    self.timer = assert(compat.uv.new_timer())
+    self.timer = clock.new_timer()
     self.running = false
     self.pending = nil
     self.marks = {}
