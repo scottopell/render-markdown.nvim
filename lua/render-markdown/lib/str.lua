@@ -88,4 +88,26 @@ function M.pad(n)
     return n > 0 and (' '):rep(n) or ''
 end
 
+---Convert a byte offset within a string to a display column (1-indexed)
+---Byte offset is 0-indexed (like treesitter columns relative to line start)
+---Result is 1-indexed display column suitable for str.sub()
+---@param s string The string to analyze
+---@param byte_offset integer The byte offset within the string (0-indexed)
+---@return integer display_col The 1-indexed display column
+function M.byte_to_col(s, byte_offset)
+    local bytes = vim.str_utf_pos(s)
+    local col = 1
+    for k, start_byte in ipairs(bytes) do
+        if start_byte > byte_offset + 1 then
+            break
+        end
+        if start_byte <= byte_offset then
+            local end_byte = k < #bytes and bytes[k + 1] - 1 or #s
+            local char = s:sub(start_byte, end_byte)
+            col = col + M.width(char)
+        end
+    end
+    return col
+end
+
 return M

@@ -2,6 +2,7 @@ local Base = require('render-markdown.render.base')
 local iter = require('render-markdown.lib.iter')
 local log = require('render-markdown.core.log')
 local str = require('render-markdown.lib.str')
+local ts = require('render-markdown.core.ts')
 
 ---@class render.md.table.Data
 ---@field delim render.md.table.DelimRow
@@ -232,6 +233,245 @@ function Render:run()
     end
 end
 
+---Map of treesitter node types to highlight groups for inline styling
+---@type table<string, string>
+local inline_highlights = {
+    strong_emphasis = '@markup.strong',
+    emphasis = '@markup.italic',
+    code_span = 'RenderMarkdownCodeInline',
+}
+
+---Apply concealment to text within a byte range, returning the processed text
+---@private
+---@param row_node render.md.Node The row node containing the text
+---@param start_byte integer Start byte offset (buffer column)
+---@param end_byte integer End byte offset (buffer column)
+---@return string processed_text Text with concealment applied
+function Render:apply_conceal(row_node, start_byte, end_byte)
+    local text = row_node.text
+    local row_start = row_node.start_col
+
+    local conceal_line = self.context.conceal:line(row_node)
+    local ranges = conceal_line.ranges
+
+    if not self.context.conceal:enabled() or #ranges == 0 then
+        local content_start = str.byte_to_col(text, start_byte)
+        local content_end = str.byte_to_col(text, end_byte) - 1
+        return str.sub(text, content_start, content_end)
+    end
+
+    local result = ''
+    local pos = start_byte
+
+    for _, range in ipairs(ranges) do
+        local conceal_start = range[1] - row_start
+        local conceal_end = range[2] - row_start
+        local replacement = range[3]
+
+        if conceal_end > start_byte and conceal_start < end_byte then
+            local overlap_start = math.max(conceal_start, start_byte)
+            local overlap_end = math.min(conceal_end, end_byte)
+
+            if pos < overlap_start then
+                local pre_start = str.byte_to_col(text, pos)
+                local pre_end = str.byte_to_col(text, overlap_start) - 1
+                result = result .. str.sub(text, pre_start, pre_end)
+            end
+
+            result = result .. replacement
+            pos = overlap_end
+        end
+    end
+
+    if pos < end_byte then
+        local post_start = str.byte_to_col(text, pos)
+        local post_end = str.byte_to_col(text, end_byte) - 1
+        result = result .. str.sub(text, post_start, post_end)
+    end
+
+    return result
+end
+
+---Query treesitter for inline formatting elements within a byte range
+---@private
+---@param row_node render.md.Node The row node
+---@param start_buf integer Start byte in buffer coordinates
+---@param end_buf integer End byte in buffer coordinates
+---@return table[] elements Array of {start_byte, end_byte, highlight} (buffer coords)
+function Render:get_inline_elements(row_node, start_buf, end_buf)
+    local elements = {}
+    local row = row_node.start_row
+
+    local parser = vim.treesitter.get_parser(self.context.buf, 'markdown')
+    if not parser then
+        return elements
+    end
+
+    local inline_parser = nil
+    for lang, child in pairs(parser:children()) do
+        if lang == 'markdown_inline' then
+            inline_parser = child
+            break
+        end
+    end
+
+    if not inline_parser then
+        return elements
+    end
+
+    local trees = inline_parser:parse()
+    if not trees or #trees == 0 then
+        return elements
+    end
+
+    local query = ts.parse('markdown_inline', [[
+        (strong_emphasis) @strong_emphasis
+        (emphasis) @emphasis
+        (code_span) @code_span
+    ]])
+
+    for _, tree in ipairs(trees) do
+        local root = tree:root()
+        for id, node in query:iter_captures(root, self.context.buf, row, row + 1) do
+            local capture_name = query.captures[id]
+            local highlight = inline_highlights[capture_name]
+            if highlight then
+                local sr, sc, _, ec = node:range()
+                if sr == row and ec > start_buf and sc < end_buf then
+                    elements[#elements + 1] = {
+                        start_byte = sc,
+                        end_byte = ec,
+                        highlight = highlight,
+                    }
+                end
+            end
+        end
+    end
+
+    table.sort(elements, function(a, b)
+        return a.start_byte < b.start_byte
+    end)
+
+    return elements
+end
+
+---Process cell content, returning chunks with concealment and inline styling applied
+---@private
+---@param row_node render.md.Node The row node containing the text
+---@param start_byte integer Start byte offset (relative to row start)
+---@param end_byte integer End byte offset (relative to row start)
+---@param default_highlight string Default highlight for non-styled text
+---@return table[] chunks Array of {text, highlight} pairs
+function Render:process_cell_content(row_node, start_byte, end_byte, default_highlight)
+    local text = row_node.text
+    local row_start = row_node.start_col
+
+    local start_buf = row_start + start_byte
+    local end_buf = row_start + end_byte
+
+    local conceal_line = self.context.conceal:line(row_node)
+    local conceal_ranges = conceal_line.ranges
+
+    local inline_elements = self:get_inline_elements(row_node, start_buf, end_buf)
+
+    local conceal_enabled = self.context.conceal:enabled() and #conceal_ranges > 0
+    if not conceal_enabled and #inline_elements == 0 then
+        local content_start = str.byte_to_col(text, start_byte)
+        local content_end = str.byte_to_col(text, end_byte) - 1
+        return { { str.sub(text, content_start, content_end), default_highlight } }
+    end
+
+    ---@param buf_byte integer Buffer byte position
+    ---@return boolean is_concealed, string replacement
+    local function check_conceal(buf_byte)
+        for _, range in ipairs(conceal_ranges) do
+            if buf_byte >= range[1] and buf_byte < range[2] then
+                return true, range[3] or ''
+            end
+        end
+        return false, ''
+    end
+
+    ---@param buf_byte integer Buffer byte position
+    ---@return string? highlight
+    local function get_inline_highlight(buf_byte)
+        for _, elem in ipairs(inline_elements) do
+            if buf_byte >= elem.start_byte and buf_byte < elem.end_byte then
+                return elem.highlight
+            end
+        end
+        return nil
+    end
+
+    local bytes = vim.str_utf_pos(text)
+    local chunks = {}
+    local current_text = ''
+    local current_highlight = default_highlight
+    local processed_conceal_ranges = {}
+
+    for k, char_start_1idx in ipairs(bytes) do
+        local char_byte = char_start_1idx - 1
+
+        if char_byte >= end_byte then
+            break
+        end
+        if char_byte < start_byte then
+            goto continue
+        end
+
+        local char_end_1idx = k < #bytes and bytes[k + 1] - 1 or #text
+        local char = text:sub(char_start_1idx, char_end_1idx)
+
+        local buf_pos = row_start + char_byte
+        local is_concealed, replacement = check_conceal(buf_pos)
+
+        if is_concealed then
+            if #current_text > 0 then
+                chunks[#chunks + 1] = { current_text, current_highlight }
+                current_text = ''
+            end
+
+            local range_key = nil
+            for _, range in ipairs(conceal_ranges) do
+                if buf_pos >= range[1] and buf_pos < range[2] then
+                    range_key = range[1]
+                    break
+                end
+            end
+
+            if range_key and not processed_conceal_ranges[range_key] and #replacement > 0 then
+                processed_conceal_ranges[range_key] = true
+                local repl_hl = get_inline_highlight(buf_pos) or default_highlight
+                chunks[#chunks + 1] = { replacement, repl_hl }
+            end
+        else
+            local char_highlight = get_inline_highlight(buf_pos) or default_highlight
+
+            if char_highlight ~= current_highlight then
+                if #current_text > 0 then
+                    chunks[#chunks + 1] = { current_text, current_highlight }
+                end
+                current_text = char
+                current_highlight = char_highlight
+            else
+                current_text = current_text .. char
+            end
+        end
+
+        ::continue::
+    end
+
+    if #current_text > 0 then
+        chunks[#chunks + 1] = { current_text, current_highlight }
+    end
+
+    if #chunks == 0 then
+        return { { '', default_highlight } }
+    end
+
+    return chunks
+end
+
 ---Build a row Line object using calculated column widths (same approach as delimiter)
 ---This ensures consistent widths for horizontal scroll alignment
 ---@private
@@ -253,21 +493,30 @@ function Render:build_row_line(row, highlight)
         local delim_col = delim_cols[i]
         local target_width = delim_col.width
 
-        -- Extract cell content from between pipes. Tree-sitter positions
-        -- are byte columns in the buffer, so use a byte-based substring
-        -- (string.sub) on row.node.text - not str.sub, which interprets
-        -- its arguments as display columns and over-extracts when the
-        -- row contains double-width glyphs (CJK, emoji) whose byte count
-        -- exceeds their display width.
+        -- Extract cell content between pipes. process_cell_content
+        -- queries treesitter for inline formatting (bold/italic/code)
+        -- and applies concealment, returning chunks with per-chunk
+        -- highlights. Byte offsets here are relative to the row start;
+        -- process_cell_content handles the byte->display-column
+        -- conversion for multi-byte glyphs (CJK, emoji).
         local row_start = row.node.start_col
-        local content_start = row.pipes[i].end_col - row_start + 1
-        local content_end = row.pipes[i + 1].start_col - row_start
+        local content_start_byte = row.pipes[i].end_col - row_start
+        local content_end_byte = row.pipes[i + 1].start_col - row_start
 
-        local cell_content = row.node.text:sub(content_start, content_end)
-        local cell_width = str.width(cell_content)
+        local chunks = self:process_cell_content(
+            row.node,
+            content_start_byte,
+            content_end_byte,
+            highlight
+        )
+
+        local cell_width = 0
+        for _, chunk in ipairs(chunks) do
+            cell_width = cell_width + str.width(chunk[1])
+            line:text(chunk[1], chunk[2])
+        end
 
         -- Pad to match target width (left-align)
-        line:text(cell_content, highlight)
         local fill = target_width - cell_width
         if fill > 0 then
             line:pad(fill)

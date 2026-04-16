@@ -177,6 +177,93 @@ describe('horizontal scroll', function()
             )
             assert(success, err)
         end)
+
+        -- Table with variation-selector emojis (⚠️ = 6 bytes, 2 display width).
+        -- Exercises byte-vs-display-column conversion in build_row_line;
+        -- without that fix, cells with ⚠️ end up wider than cells with ✅
+        -- and the strict alignment assert fails.
+        local emoji_table_md = {
+            '| Status | Name   | Notes          |',
+            '|--------|--------|----------------|',
+            '| ✅     | First  | Single char    |',
+            '| ⚠️     | Second | Variation sel  |',
+            '| ❌     | Third  | Single char    |',
+        }
+
+        it('emoji table rows aligned when scrolled (proptest)', function()
+            -- 36 display columns wide; clamp to 1..25 so at least 10
+            -- cols remain visible after trim.
+            local success, err = proptest_integer(
+                { iterations = 20, min = 1, max = 25 },
+                function()
+                    util.setup.text(emoji_table_md)
+                end,
+                function(leftcol)
+                    util.setup.view({ leftcol = leftcol })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3, 4 })
+                end
+            )
+            assert(success, err)
+        end)
+
+        -- Table with bold text in cells (like newspaper-table.md).
+        -- Bold markers ** must be concealed even when scrolled; this
+        -- also verifies the bold highlight is preserved in the overlay.
+        local bold_table_md = {
+            '| Requirement      | Status | Notes   |',
+            '|------------------|--------|---------|',
+            '| **REQ-001:** Foo | ✅     | Works   |',
+            '| **REQ-002:** Bar | ✅     | Works   |',
+            '| **Deferred**     | ❌     | Skipped |',
+        }
+
+        it('bold table rows aligned when scrolled (proptest)', function()
+            -- 40 display columns wide; clamp to 1..29.
+            local success, err = proptest_integer(
+                { iterations = 20, min = 1, max = 29 },
+                function()
+                    util.setup.text(bold_table_md)
+                end,
+                function(leftcol)
+                    util.setup.view({ leftcol = leftcol })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3, 4 })
+                end
+            )
+            assert(success, err)
+        end)
+
+        it('preserves bold styling in scrolled table overlays', function()
+            -- REQ-HST-004: when scrolled, bold text retains the
+            -- @markup.strong highlight via multi-chunk virt_text.
+            util.setup.text(bold_table_md)
+            util.setup.view({ leftcol = 5 })
+
+            local _, highlights = util.has_multiple_overlay_highlights(2)
+            assert(
+                highlights['@markup.strong'] == true,
+                ('Row 2 should have @markup.strong highlight. Found: %s'):format(
+                    vim.inspect(highlights)
+                )
+            )
+        end)
+
+        -- Exercises all three inline styles process_cell_content handles.
+        local mixed_inline_table_md = {
+            '| Type   | Example         | Status |',
+            '|--------|-----------------|--------|',
+            '| Bold   | **important**   | ✅     |',
+            '| Italic | _emphasized_    | ✅     |',
+            '| Code   | `inline_code`   | ✅     |',
+        }
+
+        it('preserves italic and code styling in scrolled overlays', function()
+            util.setup.text(mixed_inline_table_md)
+            util.setup.view({ leftcol = 5 })
+
+            util.assert_overlay_has_highlight(2, '@markup.strong')
+            util.assert_overlay_has_highlight(3, '@markup.italic')
+            util.assert_overlay_has_highlight(4, 'RenderMarkdownCodeInline')
+        end)
     end)
 
     describe('code blocks', function()

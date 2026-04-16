@@ -662,4 +662,71 @@ function M.assert_fullline_widths_strict(rows, min_width)
     end
 end
 
+---Get overlay chunks with their highlight groups for a specific row
+---@param row integer
+---@return table[] chunks Array of {text, highlight} from overlay virt_text
+function M.get_overlay_chunks(row)
+    local ui = require('render-markdown.core.ui')
+    local marks = vim.api.nvim_buf_get_extmarks(
+        0,
+        ui.ns,
+        { row, 0 },
+        { row, -1 },
+        { details = true }
+    )
+    local all_chunks = {} ---@type table[]
+    for _, mark in ipairs(marks) do
+        local details = mark[4]
+        if details.virt_text_pos == 'overlay' and details.virt_text then
+            for _, chunk in ipairs(details.virt_text) do
+                all_chunks[#all_chunks + 1] = {
+                    text = chunk[1] or '',
+                    highlight = chunk[2] or '',
+                }
+            end
+        end
+    end
+    return all_chunks
+end
+
+---Check if a row's overlay contains multiple distinct highlight groups
+---@param row integer
+---@return boolean has_multiple_highlights
+---@return table<string, boolean> highlights Set of highlight groups found
+function M.has_multiple_overlay_highlights(row)
+    local chunks = M.get_overlay_chunks(row)
+    local highlights = {} ---@type table<string, boolean>
+    for _, chunk in ipairs(chunks) do
+        if chunk.highlight and chunk.highlight ~= '' then
+            highlights[chunk.highlight] = true
+        end
+    end
+    local count = vim.tbl_count(highlights)
+    return count > 1, highlights
+end
+
+---Assert that a row's overlay contains a specific highlight group
+---@param row integer
+---@param expected_highlight string
+function M.assert_overlay_has_highlight(row, expected_highlight)
+    local chunks = M.get_overlay_chunks(row)
+    local found = false
+    for _, chunk in ipairs(chunks) do
+        if chunk.highlight == expected_highlight then
+            found = true
+            break
+        end
+    end
+    assert(
+        found,
+        ('Row %d overlay does not contain highlight %s. Found: %s'):format(
+            row,
+            expected_highlight,
+            vim.inspect(vim.tbl_map(function(c)
+                return c.highlight
+            end, chunks))
+        )
+    )
+end
+
 return M

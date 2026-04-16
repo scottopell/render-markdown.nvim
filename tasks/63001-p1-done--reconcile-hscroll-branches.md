@@ -2,7 +2,7 @@
 artifact: single merged branch with horizontal scroll + inline styling
 created: 2026-04-15
 priority: p1
-status: ready
+status: done
 ---
 
 # Reconcile horizontal scroll branches
