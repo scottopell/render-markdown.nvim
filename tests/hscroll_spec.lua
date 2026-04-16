@@ -1,0 +1,343 @@
+---@module 'luassert'
+
+local util = require('tests.util')
+
+---Proptest-style property testing with random integer sampling.
+---Runs a property function across random values plus boundaries.
+---On failure, reports the minimal failing value for easier debugging.
+---@param opts { iterations?: integer, min?: integer, max?: integer, seed?: integer, critical_range?: integer[] }
+---@param setup_fn fun() Function to set up test state (called once)
+---@param property_fn fun(value: integer) Property to test at each value
+---@return boolean success
+---@return string? error_msg
+local function proptest_integer(opts, setup_fn, property_fn)
+    opts = opts or {}
+    local seed = opts.seed or os.time()
+    local iterations = opts.iterations or 100
+    local min_val = opts.min or 0
+    local max_val = opts.max or 200
+    local critical_range = opts.critical_range or {}
+
+    math.randomseed(seed)
+    setup_fn()
+
+    local failures = {} ---@type table<integer, string>
+
+    -- Test boundary cases first (most likely to find issues)
+    local boundaries = { min_val, min_val + 1, min_val + 2, max_val - 1, max_val }
+    for _, val in ipairs(boundaries) do
+        local ok, err = pcall(property_fn, val)
+        if not ok then
+            failures[val] = tostring(err)
+        end
+    end
+
+    -- Random sampling across the range
+    for _ = 1, iterations do
+        local val = math.random(min_val, max_val)
+        if not failures[val] then -- Skip if already tested
+            local ok, err = pcall(property_fn, val)
+            if not ok then
+                failures[val] = tostring(err)
+            end
+        end
+    end
+
+    -- Test critical range (known problem areas)
+    for _, val in ipairs(critical_range) do
+        if val >= min_val and val <= max_val and not failures[val] then
+            local ok, err = pcall(property_fn, val)
+            if not ok then
+                failures[val] = tostring(err)
+            end
+        end
+    end
+
+    if next(failures) then
+        -- Find minimal failing value (shrinking)
+        local min_fail = math.huge
+        for val in pairs(failures) do
+            min_fail = math.min(min_fail, val)
+        end
+        local fail_count = vim.tbl_count(failures)
+        local error_msg = ('Property failed at %d values. Minimal failing: %d (seed=%d)\nError: %s'):format(
+            fail_count,
+            min_fail,
+            seed,
+            failures[min_fail]
+        )
+        return false, error_msg
+    end
+
+    return true, nil
+end
+
+-- Critical leftcol range where horizontal scroll bugs were found (30-40)
+local CRITICAL_LEFTCOL_RANGE = {}
+for i = 30, 40 do
+    CRITICAL_LEFTCOL_RANGE[#CRITICAL_LEFTCOL_RANGE + 1] = i
+end
+
+describe('horizontal scroll', function()
+    describe('tables', function()
+        local table_md = {
+            '| Col1 | Column Two | Col3 |',
+            '|------|------------|------|',
+            '| a    | data here  | x    |',
+            '| bb   | more data  | yy   |',
+        }
+
+        it('renders overlays at leftcol 0', function()
+            util.setup.text(table_md)
+            util.setup.view({ leftcol = 0 })
+            -- Verify table overlay marks exist
+            local widths = util.get_overlay_widths({ 0, 1, 2, 3 })
+            assert(#widths > 0, 'Table should have overlay marks at leftcol 0')
+        end)
+
+        it('delimiter row shrinks by leftcol when scrolled', function()
+            -- When a table is horizontally scrolled, the delimiter
+            -- overlay is clipped on the left by `leftcol` columns, so
+            -- the visible width should equal (base_width - leftcol) for
+            -- every scroll position until the whole row is clipped.
+            util.setup.text(table_md)
+            util.setup.view({ leftcol = 0 })
+            local base = util.get_overlay_widths({ 1 })
+            local base_width = base[1] and base[1].width
+            assert(base_width, 'no delimiter overlay at leftcol 0')
+
+            for _, lc in ipairs({ 5, 10, 15, 20 }) do
+                util.setup.view({ leftcol = lc })
+                local widths = util.get_overlay_widths({ 1 })
+                if widths[1] then
+                    assert.equals(
+                        math.max(0, base_width - lc),
+                        widths[1].width,
+                        ('Delimiter width at leftcol %d should be %d - %d'):format(
+                            lc,
+                            base_width,
+                            lc
+                        )
+                    )
+                end
+            end
+        end)
+
+        it('all rows have equal full-line overlay widths when scrolled (proptest)', function()
+            -- When leftcol > 0, tables switch to full-line overlay mode
+            -- and all rows should have the same overlay width.
+            --
+            -- The small table is 28 display columns wide; any leftcol
+            -- that clips the row down below the strict helper's
+            -- min_width=10 filter produces zero observable fullline
+            -- overlays, so the proptest range is clamped to values
+            -- that are guaranteed to leave at least 10 columns
+            -- visible. The earlier form of this test ran [1, 150]
+            -- with the lenient helper, which silently passed ~87% of
+            -- iterations (leftcol >= 20 fully clipped) instead of
+            -- actually testing alignment. CRITICAL_LEFTCOL_RANGE
+            -- {30..40} is also entirely outside the testable range
+            -- for this table, so it is dropped here - the wide table
+            -- below exercises that range.
+            local success, err = proptest_integer(
+                { iterations = 50, min = 1, max = 17 },
+                function()
+                    util.setup.text(table_md)
+                end,
+                function(leftcol)
+                    util.setup.view({ leftcol = leftcol })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3 })
+                end
+            )
+            assert(success, err)
+        end)
+
+        -- Wide table with varying content lengths (more likely to expose alignment bugs)
+        local wide_table_md = {
+            '| Short | Medium Length | This Is A Much Longer Column Header |',
+            '|-------|---------------|--------------------------------------|',
+            '| a     | hello world   | LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL |',
+            '| bb    | hi            | short                                |',
+        }
+
+        it('wide table rows aligned when scrolled (proptest)', function()
+            -- 64 display columns wide; clamp to leftcol 1..53 so the
+            -- trim always leaves at least 10 columns for the strict
+            -- helper's min_width filter. This range still covers the
+            -- historic bug range CRITICAL_LEFTCOL_RANGE {30..40}.
+            local success, err = proptest_integer(
+                { iterations = 50, min = 1, max = 53, critical_range = CRITICAL_LEFTCOL_RANGE },
+                function()
+                    util.setup.text(wide_table_md)
+                end,
+                function(leftcol)
+                    util.setup.view({ leftcol = leftcol })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3 })
+                end
+            )
+            assert(success, err)
+        end)
+
+        -- Table with variation-selector emojis (⚠️ = 6 bytes, 2 display width).
+        -- Exercises byte-vs-display-column conversion in build_row_line;
+        -- without that fix, cells with ⚠️ end up wider than cells with ✅
+        -- and the strict alignment assert fails.
+        local emoji_table_md = {
+            '| Status | Name   | Notes          |',
+            '|--------|--------|----------------|',
+            '| ✅     | First  | Single char    |',
+            '| ⚠️     | Second | Variation sel  |',
+            '| ❌     | Third  | Single char    |',
+        }
+
+        it('emoji table rows aligned when scrolled (proptest)', function()
+            -- 36 display columns wide; clamp to 1..25 so at least 10
+            -- cols remain visible after trim.
+            local success, err = proptest_integer(
+                { iterations = 20, min = 1, max = 25 },
+                function()
+                    util.setup.text(emoji_table_md)
+                end,
+                function(leftcol)
+                    util.setup.view({ leftcol = leftcol })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3, 4 })
+                end
+            )
+            assert(success, err)
+        end)
+
+        -- Table with bold text in cells (like newspaper-table.md).
+        -- Bold markers ** must be concealed even when scrolled; this
+        -- also verifies the bold highlight is preserved in the overlay.
+        local bold_table_md = {
+            '| Requirement      | Status | Notes   |',
+            '|------------------|--------|---------|',
+            '| **REQ-001:** Foo | ✅     | Works   |',
+            '| **REQ-002:** Bar | ✅     | Works   |',
+            '| **Deferred**     | ❌     | Skipped |',
+        }
+
+        it('bold table rows aligned when scrolled (proptest)', function()
+            -- 40 display columns wide; clamp to 1..29.
+            local success, err = proptest_integer(
+                { iterations = 20, min = 1, max = 29 },
+                function()
+                    util.setup.text(bold_table_md)
+                end,
+                function(leftcol)
+                    util.setup.view({ leftcol = leftcol })
+                    util.assert_fullline_widths_strict({ 0, 1, 2, 3, 4 })
+                end
+            )
+            assert(success, err)
+        end)
+
+        it('preserves bold styling in scrolled table overlays', function()
+            -- REQ-HST-004: when scrolled, bold text retains the
+            -- @markup.strong highlight via multi-chunk virt_text.
+            util.setup.text(bold_table_md)
+            util.setup.view({ leftcol = 5 })
+
+            local _, highlights = util.has_multiple_overlay_highlights(2)
+            assert(
+                highlights['@markup.strong'] == true,
+                ('Row 2 should have @markup.strong highlight. Found: %s'):format(
+                    vim.inspect(highlights)
+                )
+            )
+        end)
+
+        -- Exercises all three inline styles process_cell_content handles.
+        local mixed_inline_table_md = {
+            '| Type   | Example         | Status |',
+            '|--------|-----------------|--------|',
+            '| Bold   | **important**   | ✅     |',
+            '| Italic | _emphasized_    | ✅     |',
+            '| Code   | `inline_code`   | ✅     |',
+        }
+
+        it('preserves italic and code styling in scrolled overlays', function()
+            util.setup.text(mixed_inline_table_md)
+            util.setup.view({ leftcol = 5 })
+
+            util.assert_overlay_has_highlight(2, '@markup.strong')
+            util.assert_overlay_has_highlight(3, '@markup.italic')
+            util.assert_overlay_has_highlight(4, 'RenderMarkdownCodeInline')
+        end)
+    end)
+
+    describe('code blocks', function()
+        local code_md = {
+            '```lua',
+            'local x = 1',
+            'local longer_line = "some text here"',
+            '```',
+        }
+
+        it('renders at leftcol 0', function()
+            util.setup.text(code_md)
+            util.setup.view({ leftcol = 0 })
+            -- Verify code block marks exist
+            local marks = util.actual_marks()
+            assert(#marks > 0, 'Code block should have extmarks at leftcol 0')
+        end)
+
+        it('renders at leftcol 10', function()
+            util.setup.text(code_md)
+            util.setup.view({ leftcol = 10 })
+            local marks = util.actual_marks()
+            assert(#marks > 0, 'Code block should have extmarks when scrolled')
+        end)
+    end)
+
+    describe('headings', function()
+        local heading_md = {
+            '# Heading One',
+            '',
+            '## Heading Two',
+        }
+
+        it('renders at leftcol 0', function()
+            util.setup.text(heading_md)
+            util.setup.view({ leftcol = 0 })
+            local marks = util.actual_marks()
+            assert(#marks > 0, 'Headings should have extmarks at leftcol 0')
+        end)
+
+        it('renders at leftcol 5', function()
+            util.setup.text(heading_md)
+            util.setup.view({ leftcol = 5 })
+            local marks = util.actual_marks()
+            assert(#marks > 0, 'Headings should have extmarks when scrolled')
+        end)
+    end)
+
+    describe('dashes', function()
+        local dash_md = {
+            'Above the line',
+            '---',
+            'Below the line',
+        }
+
+        it('renders at leftcol 0', function()
+            util.setup.text(dash_md)
+            util.setup.view({ leftcol = 0 })
+            local marks = util.actual_marks()
+            -- Filter for marks on line 1 (the dash line, 0-indexed)
+            local dash_marks = vim.tbl_filter(function(m)
+                return m.row[1] == 1
+            end, marks)
+            assert(#dash_marks > 0, 'Dash should have extmarks at leftcol 0')
+        end)
+
+        it('renders at leftcol 10', function()
+            util.setup.text(dash_md)
+            util.setup.view({ leftcol = 10 })
+            local marks = util.actual_marks()
+            local dash_marks = vim.tbl_filter(function(m)
+                return m.row[1] == 1
+            end, marks)
+            assert(#dash_marks > 0, 'Dash should have extmarks when scrolled')
+        end)
+    end)
+end)

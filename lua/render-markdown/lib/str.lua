@@ -9,11 +9,21 @@ function M.split(s, sep, trimempty)
     return vim.split(s, sep, { plain = true, trimempty = trimempty })
 end
 
+---Display-column substring. Returns the portion of `s` covering display
+---columns [i, j] inclusive. Width-preserving: when a multi-column glyph
+---straddles the start or end of the range, the visible portion of that
+---glyph is substituted with spaces so the returned string's display
+---width always equals `max(0, j - i + 1)` (assuming the source covers
+---the range). This matters for callers like Line:sub which rely on
+---slice-width equaling requested-width for horizontal-scroll clipping.
 ---@param s string
 ---@param i integer 1-based inclusive
 ---@param j integer 1-based inclusive
 ---@return string
 function M.sub(s, i, j)
+    if i > j then
+        return ''
+    end
     local bytes = vim.str_utf_pos(s)
     local col = 1
     local result = ''
@@ -21,8 +31,18 @@ function M.sub(s, i, j)
         local end_byte = k < #bytes and bytes[k + 1] - 1 or #s
         local char = s:sub(start_byte, end_byte)
         local width = M.width(char)
-        if col >= i and col + width - 1 <= j then
-            result = result .. char
+        if width > 0 then
+            local c_start, c_end = col, col + width - 1
+            if c_start >= i and c_end <= j then
+                -- fully within the requested range
+                result = result .. char
+            elseif c_end >= i and c_start <= j then
+                -- partially overlapping: substitute the visible portion
+                -- of this glyph with spaces to keep the column count
+                local visible_start = math.max(c_start, i)
+                local visible_end = math.min(c_end, j)
+                result = result .. (' '):rep(visible_end - visible_start + 1)
+            end
         end
         col = col + width
     end
@@ -66,6 +86,28 @@ end
 ---@return string
 function M.pad(n)
     return n > 0 and (' '):rep(n) or ''
+end
+
+---Convert a byte offset within a string to a display column (1-indexed)
+---Byte offset is 0-indexed (like treesitter columns relative to line start)
+---Result is 1-indexed display column suitable for str.sub()
+---@param s string The string to analyze
+---@param byte_offset integer The byte offset within the string (0-indexed)
+---@return integer display_col The 1-indexed display column
+function M.byte_to_col(s, byte_offset)
+    local bytes = vim.str_utf_pos(s)
+    local col = 1
+    for k, start_byte in ipairs(bytes) do
+        if start_byte > byte_offset + 1 then
+            break
+        end
+        if start_byte <= byte_offset then
+            local end_byte = k < #bytes and bytes[k + 1] - 1 or #s
+            local char = s:sub(start_byte, end_byte)
+            col = col + M.width(char)
+        end
+    end
+    return col
 end
 
 return M

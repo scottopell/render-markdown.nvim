@@ -15,14 +15,18 @@ describe('str', function()
         end)
 
         it('double', function()
+            -- Width-preserving: when a double-width glyph straddles the
+            -- start or end of the requested range, the visible portion
+            -- is substituted with spaces so the returned string's display
+            -- width always equals j - i + 1.
             local s = 'a🕛b'
             assert.same('a', str.sub(s, 1, 1))
-            assert.same('', str.sub(s, 2, 2))
-            assert.same('', str.sub(s, 3, 3))
+            assert.same(' ', str.sub(s, 2, 2)) -- left half of 🕛 → space
+            assert.same(' ', str.sub(s, 3, 3)) -- right half of 🕛 → space
             assert.same('b', str.sub(s, 4, 4))
-            assert.same('a', str.sub(s, 1, 2))
+            assert.same('a ', str.sub(s, 1, 2)) -- 🕛 left half → space
             assert.same('🕛', str.sub(s, 2, 3))
-            assert.same('b', str.sub(s, 3, 4))
+            assert.same(' b', str.sub(s, 3, 4)) -- 🕛 right half → space
             assert.same('a🕛', str.sub(s, 1, 3))
             assert.same('🕛b', str.sub(s, 2, 4))
             assert.same(s, str.sub(s, 1, 4))

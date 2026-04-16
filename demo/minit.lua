@@ -17,7 +17,7 @@ vim.opt.rtp:prepend(lazypath)
 
 -- selene: allow(mixed_table)
 require('lazy').setup({
-    dev = { path = '~/dev/repos/personal' },
+    dev = { path = '~/dev' },
     spec = {
         {
             'folke/tokyonight.nvim',
@@ -77,7 +77,11 @@ require('lazy').setup({
                 'nvim-mini/mini.nvim',
             },
             config = function()
-                require('render-markdown').setup({})
+                require('render-markdown').setup({
+                    anti_conceal = {
+                        enabled = false,
+                    },
+                })
             end,
         },
     },

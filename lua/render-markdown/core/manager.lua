@@ -1,3 +1,4 @@
+local buffer_state = require('render-markdown.lib.buffer_state')
 local env = require('render-markdown.lib.env')
 local log = require('render-markdown.core.log')
 local state = require('render-markdown.state')
@@ -10,8 +11,17 @@ local M = {}
 M.group = vim.api.nvim_create_augroup('RenderMarkdown', {})
 
 ---@private
----@type integer[]
-M.buffers = {}
+---Attached-bufnr set, lifetime-tied to the buffer via buffer_state.
+---Replaces a module-level list that grew on every attach and was
+---never pruned on BufDelete, making M.attached() return true for
+---long-deleted buffers. Now attach is recorded by placing a marker
+---entry in this store; on buffer deletion the marker is dropped
+---automatically.
+---@type render.md.buffer_state.Store
+M._attached_store = buffer_state.define_cache('manager.attached', {
+    make = function(_) return true end,
+    destroy = function(_) end,
+})
 
 ---called from plugin directory
 function M.init()
@@ -43,7 +53,7 @@ end
 ---@param buf integer
 ---@return boolean
 function M.attached(buf)
-    return vim.tbl_contains(M.buffers, buf)
+    return M._attached_store:peek(buf) ~= nil
 end
 
 ---@param enable? boolean
@@ -57,9 +67,9 @@ function M.set(enable)
     else
         state.enabled = not state.enabled
     end
-    for _, buf in ipairs(M.buffers) do
+    M._attached_store:for_each(function(buf, _)
         M.set_buf(buf, state.enabled)
-    end
+    end)
 end
 
 ---@param buf? integer
@@ -167,7 +177,7 @@ function M.should_attach(buf)
     end
 
     log.attach(buf, 'success')
-    M.buffers[#M.buffers + 1] = buf
+    M._attached_store:get(buf)
     return true
 end
 

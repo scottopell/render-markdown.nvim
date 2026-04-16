@@ -19,8 +19,21 @@ M.setup = {}
 function M.setup.init(opts)
     require('luassert.assert'):set_parameter('TableFormatLevel', 4)
     require('luassert.assert'):set_parameter('TableErrorHighlightColor', 'none')
+    -- Enable modelines explicitly. nvim disables 'modeline' when
+    -- running as root for security reasons, but several tests load
+    -- fixture files (tests/data/*.md) that rely on a `# vim: ft=...`
+    -- modeline to override the filetype detected from the .md
+    -- extension. Without this the tests fail in CI / containerized
+    -- environments while passing for non-root maintainers.
+    vim.opt.modeline = true
     ---@type render.md.UserConfig
     local test_config = {
+        -- debounce=0 so render callbacks run synchronously under
+        -- vim.wait(0) instead of being held as "pending" until the
+        -- 100ms debounce timer fires. Without this, every test call
+        -- after the first leading-edge render within a session is
+        -- silently queued and never observed.
+        debounce = 0,
         anti_conceal = { enabled = false },
         win_options = { concealcursor = { rendered = 'nvic' } },
         overrides = {
@@ -52,6 +65,19 @@ function M.setup.text(lines, opts)
     vim.api.nvim_set_current_buf(buf)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].filetype = 'markdown'
+    vim.wait(0)
+end
+
+---Set window view state and trigger re-render. Passes the current buf
+---and win explicitly because render-markdown's api.render resolves an
+---omitted or zero buf argument through vim.fn.win_findbuf, which
+---returns empty for buf=0 and silently skips the update.
+---@param opts vim.fn.winrestview.dict
+function M.setup.view(opts)
+    vim.fn.winrestview(opts)
+    local buf = vim.api.nvim_get_current_buf()
+    local win = vim.api.nvim_get_current_win()
+    require('render-markdown.api').render({ buf = buf, win = win })
     vim.wait(0)
 end
 
@@ -426,7 +452,6 @@ function M.assert_marks(expected)
     assert.same(#expected, #actual, 'different number of marks found')
 end
 
----@private
 ---@return render.md.test.MarkInfo[]
 function M.actual_marks()
     local ui = require('render-markdown.core.ui')
@@ -470,6 +495,238 @@ function M.actual_screen()
         actual[#actual + 1] = line
     end
     return actual
+end
+
+---@class render.md.test.OverlayInfo
+---@field row integer
+---@field width integer
+---@field text string
+
+---Get overlay widths for specified rows
+---@param rows integer[]
+---@return render.md.test.OverlayInfo[]
+function M.get_overlay_widths(rows)
+    local ui = require('render-markdown.core.ui')
+    local widths = {} ---@type render.md.test.OverlayInfo[]
+    for _, row in ipairs(rows) do
+        local marks = vim.api.nvim_buf_get_extmarks(
+            0,
+            ui.ns,
+            { row, 0 },
+            { row, -1 },
+            { details = true }
+        )
+        for _, mark in ipairs(marks) do
+            local details = mark[4]
+            if details.virt_text_pos == 'overlay' and details.virt_text then
+                -- Calculate total width across all chunks in the virt_text
+                local total_width = 0
+                local text_preview = ''
+                for _, chunk in ipairs(details.virt_text) do
+                    local chunk_text = chunk[1] or ''
+                    total_width = total_width + vim.fn.strdisplaywidth(chunk_text)
+                    text_preview = text_preview .. chunk_text
+                end
+                widths[#widths + 1] = {
+                    row = row,
+                    width = total_width,
+                    text = text_preview,
+                }
+            end
+        end
+    end
+    return widths
+end
+
+---Assert all overlay widths on given rows are equal
+---Compares the maximum overlay width per row (the full row overlay, not individual elements)
+---@param rows integer[]
+function M.assert_overlay_widths_equal(rows)
+    local widths = M.get_overlay_widths(rows)
+    assert(#widths > 0, 'No overlays found')
+
+    -- Group by row and take max width per row (full row overlay)
+    local max_per_row = {} ---@type table<integer, integer>
+    for _, w in ipairs(widths) do
+        max_per_row[w.row] = math.max(max_per_row[w.row] or 0, w.width)
+    end
+
+    -- Compare max widths across rows
+    local first_width = nil
+    for row, width in pairs(max_per_row) do
+        if first_width == nil then
+            first_width = width
+        else
+            assert.equals(
+                first_width,
+                width,
+                ('Row %d max overlay width %d != expected %d'):format(row, width, first_width)
+            )
+        end
+    end
+end
+
+---Get full-line overlay widths for specified rows (filters out small overlays like individual pipes)
+---@param rows integer[]
+---@param min_width? integer Minimum width to consider a "full-line" overlay (default 10)
+---@return table<integer, integer> Map of row -> width for rows with full-line overlays
+function M.get_fullline_overlay_widths(rows, min_width)
+    min_width = min_width or 10
+    local widths = M.get_overlay_widths(rows)
+    local result = {} ---@type table<integer, integer>
+    for _, w in ipairs(widths) do
+        if w.width >= min_width then
+            result[w.row] = w.width
+        end
+    end
+    return result
+end
+
+---Assert that all full-line overlays have equal widths
+---Only compares rows that have full-line overlays (width >= min_width)
+---This is useful for testing scrolled tables where all rows should use full-line overlay mode
+---
+---WARNING: this helper silently passes when fewer than 2 full-line
+---overlays exist. For scrolled-table alignment tests where marks are
+---EXPECTED to exist, prefer assert_fullline_widths_strict which
+---fails on "no overlays found" rather than returning green. The
+---lenient form is kept for leftcol=0 or fully-clipped cases where
+---the absence of overlays is correct.
+---@param rows integer[]
+---@param min_width? integer Minimum width to consider (default 10)
+function M.assert_fullline_widths_equal(rows, min_width)
+    local widths = M.get_fullline_overlay_widths(rows, min_width)
+
+    local count = vim.tbl_count(widths)
+    if count < 2 then
+        -- Not enough full-line overlays to compare (may be at leftcol=0 using individual pipes)
+        return
+    end
+
+    local first_width = nil
+    local first_row = nil
+    for row, width in pairs(widths) do
+        if first_width == nil then
+            first_width = width
+            first_row = row
+        else
+            assert.equals(
+                first_width,
+                width,
+                ('Row %d full-line overlay width %d != row %d width %d'):format(
+                    row,
+                    width,
+                    first_row,
+                    first_width
+                )
+            )
+        end
+    end
+end
+
+---Strict version of assert_fullline_widths_equal. Requires at least
+---two full-line overlays (one on its own cannot establish equality)
+---and fails the test instead of returning green when fewer exist.
+---
+---Use this for scrolled-table alignment assertions where the tested
+---range is guaranteed to produce overlays on every row. Using the
+---lenient form in those cases silently passes for any leftcol large
+---enough to fully clip the table, turning the assertion into a
+---no-op. The existing hscroll_spec proptests were exactly that
+---shape until this helper was introduced.
+---@param rows integer[]
+---@param min_width? integer Minimum width to consider (default 10)
+function M.assert_fullline_widths_strict(rows, min_width)
+    local widths = M.get_fullline_overlay_widths(rows, min_width or 10)
+    local count = vim.tbl_count(widths)
+    assert(
+        count >= 2,
+        ('expected >= 2 fullline overlays across rows, got %d'):format(count)
+    )
+    local first_width, first_row
+    for row, width in pairs(widths) do
+        if first_width == nil then
+            first_width, first_row = width, row
+        else
+            assert.equals(
+                first_width,
+                width,
+                ('Row %d full-line overlay width %d != row %d width %d'):format(
+                    row,
+                    width,
+                    first_row,
+                    first_width
+                )
+            )
+        end
+    end
+end
+
+---Get overlay chunks with their highlight groups for a specific row
+---@param row integer
+---@return table[] chunks Array of {text, highlight} from overlay virt_text
+function M.get_overlay_chunks(row)
+    local ui = require('render-markdown.core.ui')
+    local marks = vim.api.nvim_buf_get_extmarks(
+        0,
+        ui.ns,
+        { row, 0 },
+        { row, -1 },
+        { details = true }
+    )
+    local all_chunks = {} ---@type table[]
+    for _, mark in ipairs(marks) do
+        local details = mark[4]
+        if details.virt_text_pos == 'overlay' and details.virt_text then
+            for _, chunk in ipairs(details.virt_text) do
+                all_chunks[#all_chunks + 1] = {
+                    text = chunk[1] or '',
+                    highlight = chunk[2] or '',
+                }
+            end
+        end
+    end
+    return all_chunks
+end
+
+---Check if a row's overlay contains multiple distinct highlight groups
+---@param row integer
+---@return boolean has_multiple_highlights
+---@return table<string, boolean> highlights Set of highlight groups found
+function M.has_multiple_overlay_highlights(row)
+    local chunks = M.get_overlay_chunks(row)
+    local highlights = {} ---@type table<string, boolean>
+    for _, chunk in ipairs(chunks) do
+        if chunk.highlight and chunk.highlight ~= '' then
+            highlights[chunk.highlight] = true
+        end
+    end
+    local count = vim.tbl_count(highlights)
+    return count > 1, highlights
+end
+
+---Assert that a row's overlay contains a specific highlight group
+---@param row integer
+---@param expected_highlight string
+function M.assert_overlay_has_highlight(row, expected_highlight)
+    local chunks = M.get_overlay_chunks(row)
+    local found = false
+    for _, chunk in ipairs(chunks) do
+        if chunk.highlight == expected_highlight then
+            found = true
+            break
+        end
+    end
+    assert(
+        found,
+        ('Row %d overlay does not contain highlight %s. Found: %s'):format(
+            row,
+            expected_highlight,
+            vim.inspect(vim.tbl_map(function(c)
+                return c.highlight
+            end, chunks))
+        )
+    )
 end
 
 return M

@@ -6,6 +6,7 @@ local log = require('render-markdown.core.log')
 ---@class render.md.request.View
 ---@field private buf integer
 ---@field private ranges render.md.Range[]
+---@field private leftcol integer
 local View = {}
 View.__index = View
 
@@ -15,10 +16,14 @@ function View.new(buf)
     local self = setmetatable({}, View)
     self.buf = buf
     local ranges = {} ---@type render.md.Range[]
+    local max_leftcol = 0
     for _, win in ipairs(env.buf.wins(buf)) do
         ranges[#ranges + 1] = env.range(buf, win, 10)
+        local view = env.win.view(win)
+        max_leftcol = math.max(max_leftcol, view.leftcol)
     end
     self.ranges = interval.coalesce(ranges)
+    self.leftcol = max_leftcol
     return self
 end
 
@@ -34,6 +39,12 @@ end
 ---@param win integer
 ---@return boolean
 function View:contains(win)
+    -- Check if leftcol changed (horizontal scroll)
+    local view = env.win.view(win)
+    if view.leftcol ~= self.leftcol then
+        return false
+    end
+    -- Check if visible rows are contained
     local rows = env.range(self.buf, win, 0)
     for _, range in ipairs(self.ranges) do
         if interval.contains(range, rows) then
@@ -41,6 +52,11 @@ function View:contains(win)
         end
     end
     return false
+end
+
+---@return integer
+function View:get_leftcol()
+    return self.leftcol
 end
 
 ---@param node TSNode

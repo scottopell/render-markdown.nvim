@@ -26,9 +26,18 @@ vim.cmd.runtime('plugin/render-markdown.lua')
 vim.opt.rtp:prepend(get_path('plenary.nvim'))
 vim.cmd.runtime('plugin/plenary.vim')
 
-require('nvim-treesitter')
-    .install({ 'html', 'latex', 'markdown', 'markdown_inline', 'yaml' })
-    :wait()
+-- Install parsers if needed (handle both old and new nvim-treesitter APIs)
+local ts = require('nvim-treesitter')
+if ts.install then
+    -- New API (nvim-treesitter 1.0+)
+    ts.install({ 'html', 'latex', 'markdown', 'markdown_inline', 'yaml' }):wait()
+else
+    -- Old API or parsers already installed - just ensure they're available
+    local parsers = { 'html', 'latex', 'markdown', 'markdown_inline', 'yaml' }
+    for _, lang in ipairs(parsers) do
+        pcall(vim.treesitter.language.add, lang)
+    end
+end
 
 vim.api.nvim_create_autocmd('FileType', {
     group = vim.api.nvim_create_augroup('Highlighter', {}),
