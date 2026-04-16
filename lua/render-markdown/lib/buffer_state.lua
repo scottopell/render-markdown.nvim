@@ -197,15 +197,26 @@ function M._destroy_error(name, buf, err)
     end)
 end
 
----Test hook: synchronously wipe every store, calling all destructors.
----Used by tests to get a clean slate without going through the buffer
----lifecycle.
+---Synchronously wipe every store, calling all destructors.
+---Called from state.setup() to get a clean slate on reconfiguration,
+---and from tests. Warns if any entries existed, since setup should
+---run before any buffer populates stores.
 function M._reset_all()
+    local had_entries = false
     for _, impl in pairs(M._stores) do
         for buf, entry in pairs(impl.entries) do
+            had_entries = true
             impl.entries[buf] = nil
             pcall(impl.destroy, entry)
         end
+    end
+    if had_entries then
+        vim.schedule(function()
+            vim.notify(
+                '[render-markdown] buffer_state._reset_all found live entries -- setup ordering may be wrong',
+                vim.log.levels.WARN
+            )
+        end)
     end
     M._attached = {}
 end
