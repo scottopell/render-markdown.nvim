@@ -110,4 +110,32 @@ function M.byte_to_col(s, byte_offset)
     return col
 end
 
+---Convert a 0-indexed display column to a 0-indexed byte offset within
+---a string. The inverse of byte_to_col. If the target display column is
+---past the string's display width, returns the string's byte length.
+---Useful for mapping window leftcol (a display column) to the byte
+---position required by extmark APIs.
+---@param s string
+---@param display_col integer 0-indexed display column
+---@return integer byte_offset 0-indexed byte offset
+function M.col_to_byte(s, display_col)
+    if display_col <= 0 then
+        return 0
+    end
+    local bytes = vim.str_utf_pos(s)
+    local col = 0
+    for k, start_byte in ipairs(bytes) do
+        local end_byte = k < #bytes and bytes[k + 1] - 1 or #s
+        local char = s:sub(start_byte, end_byte)
+        local w = M.width(char)
+        -- char occupies display cols [col, col + w - 1]. Return the
+        -- first byte of whichever char contains or follows display_col.
+        if col + w > display_col then
+            return start_byte - 1
+        end
+        col = col + w
+    end
+    return #s
+end
+
 return M

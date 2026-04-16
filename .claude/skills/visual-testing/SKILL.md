@@ -370,6 +370,46 @@ terminals, attach to the issue, eyeball.
   synchronously via the test harness's `debounce = 0` config. If you
   think you need sleep, something is wrong with setup. Sleep at
   Layer 3 is different — see that section.
+- **Encoding your assumption about a bug as a test.** A test that says
+  "if the string X appears on screen, it's a bug" only works if you
+  have an independent definition of why X appearing is wrong. Rendered
+  output you haven't seen unscrolled before is not a reliable reference
+  for what "correct" looks like scrolled.
+
+## Establish the reference before writing the assertion
+
+Before writing a Layer 2 (or any) assertion, you must have a reliable
+description of what correct output looks like. Otherwise the test
+encodes your guess, not the plugin's contract. Two paths to a
+reference:
+
+1. **Capture at the other end of the scroll.** Render the same buffer
+   unscrolled, observe what's at display col N, and assert that
+   rendered scrolled output at screen col 1 (with any gutter
+   accounted for) contains the same characters.
+
+2. **Cross-check against a lower layer.** If your Layer 2 assertion
+   boils down to "the plugin's intent for this row was X", assert on
+   the intent (Layer 1 — extmarks) directly. Layer 2 bugs that look
+   identical to correct output on the grid — e.g., an overlay shifted
+   N cols left whose leading N cols fall offscreen and get clipped —
+   can only be caught by inspecting byte-level placement. The visible
+   grid lies when the rendering pipeline has compensating clips.
+
+If you cannot establish a reference, your bug report is a hypothesis,
+not an observation. Investigate at lower layers first.
+
+### Watch for hidden terminal/window gutters
+
+Before reading screen cells at column 1 and assuming you're looking at
+the first text column, verify that no gutter (signcolumn, number,
+foldcolumn) is occupying the leftmost cells. `signcolumn = 'auto'`
+will display for the whole window the moment any sign is placed
+anywhere in the buffer, shifting the entire text area right by two
+columns. A false "overlay doesn't cover" diagnosis is easy to reach if
+you mistake the signcolumn background for an uncovered buffer region.
+`vim.o.signcolumn`, `vim.fn.wincol()`, and `vim.fn.screenattr()` let
+you distinguish gutter cells from text cells.
 
 ## Adding new tests
 

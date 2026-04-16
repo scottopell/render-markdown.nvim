@@ -568,7 +568,12 @@ function Render:delimiter()
         local width = line:width()
         if trim_amount < width then
             line = line:sub(trim_amount + 1, width)
-            self.marks:add(self.config, 'table_border', delim.node.start_row, leftcol, {
+            -- leftcol is a display column but extmark col is a byte
+            -- offset; convert via the row's text so multi-byte glyphs
+            -- (emoji, CJK) before leftcol don't shift the overlay
+            -- into offscreen byte positions.
+            local mark_col = str.col_to_byte(delim.node.text, leftcol)
+            self.marks:add(self.config, 'table_border', delim.node.start_row, mark_col, {
                 virt_text = line:get(),
                 virt_text_pos = 'overlay',
             })
@@ -600,7 +605,13 @@ function Render:row(row)
             local width = line:width()
             if trim_amount < width then
                 line = line:sub(trim_amount + 1, width)
-                self.marks:add(self.config, 'table_border', row.node.start_row, leftcol, {
+                -- leftcol is a display column but extmark col is a
+                -- byte offset; convert via the row's text so rows
+                -- containing multi-byte glyphs before leftcol (emoji,
+                -- CJK) don't land the overlay at the wrong screen
+                -- position.
+                local mark_col = str.col_to_byte(row.node.text, leftcol)
+                self.marks:add(self.config, 'table_border', row.node.start_row, mark_col, {
                     virt_text = line:get(),
                     virt_text_pos = 'overlay',
                 })
