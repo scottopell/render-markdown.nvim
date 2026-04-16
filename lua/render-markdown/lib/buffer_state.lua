@@ -197,10 +197,19 @@ function M._destroy_error(name, buf, err)
     end)
 end
 
+---@private
+---True after the first _reset_all call. Used to distinguish the
+---initial setup (stores should be empty; entries would indicate
+---an ordering bug) from subsequent reconfigurations (entries are
+---expected and legitimately cleared).
+M._reset_seen = false
+
 ---Synchronously wipe every store, calling all destructors.
 ---Called from state.setup() to get a clean slate on reconfiguration,
----and from tests. Warns if any entries existed, since setup should
----run before any buffer populates stores.
+---and from tests. Warns only on the first call if any entries
+---existed, since the initial setup should run before any buffer
+---populates stores. Subsequent calls (reconfiguration) expect to
+---find entries and silently wipe them.
 function M._reset_all()
     local had_entries = false
     for _, impl in pairs(M._stores) do
@@ -210,14 +219,15 @@ function M._reset_all()
             pcall(impl.destroy, entry)
         end
     end
-    if had_entries then
+    if had_entries and not M._reset_seen then
         vim.schedule(function()
             vim.notify(
-                '[render-markdown] buffer_state._reset_all found live entries -- setup ordering may be wrong',
+                '[render-markdown] buffer_state._reset_all found live entries on initial setup -- ordering may be wrong',
                 vim.log.levels.WARN
             )
         end)
     end
+    M._reset_seen = true
     M._attached = {}
 end
 
