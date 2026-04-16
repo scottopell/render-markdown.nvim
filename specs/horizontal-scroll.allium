@@ -16,12 +16,10 @@
 --     with horizontal scroll)
 --   - Anti-conceal refresh policy (see separate spec)
 --
--- History: Two bugs surfaced while generating property tests from this
--- spec and were fixed. Both were invisible to the existing test suite
--- because the test helper was passing buf=0 to api.render, which
--- silently no-op'd via vim.fn.win_findbuf(0)={} - the scroll was never
--- actually re-rendered after winrestview. After fixing the helper and
--- re-running the generated tests:
+-- History: three bugs in the byte-vs-display family have surfaced
+-- and been fixed. All three were invisible to existing property tests
+-- until a screen-grid (Layer 2) probe or a targeted byte-col
+-- assertion was added:
 --   1. build_row_line (render/markdown/table.lua) extracted cell content
 --      by passing byte offsets to str.sub, which interprets its
 --      arguments as DISPLAY columns. For ASCII tables byte == display
@@ -32,7 +30,31 @@
 --      start or end of the requested range, returning a string whose
 --      display width was less than (j - i + 1). Fix: substitute the
 --      visible portion of the clipped glyph with spaces to preserve
---      display width. This property now has its own invariant below.
+--      display width. This property now has its own invariant (I6).
+--   3. Render:row and Render:delimiter passed leftcol (a DISPLAY
+--      column) directly as the extmark's col parameter, which
+--      nvim_buf_set_extmark treats as a BYTE offset. For rows whose
+--      source contains multi-byte glyphs before leftcol (emoji, CJK),
+--      the mark was placed at a byte position that corresponds to a
+--      display column STRICTLY LESS than leftcol. With
+--      virt_text_pos='overlay', the overlay's leading display columns
+--      then landed offscreen and were silently clipped by neovim's
+--      scroll, leaving the visible portion of the overlay shifted to
+--      the right of where it should be. Because no existing invariant
+--      or test inspected the extmark's byte col directly, and because
+--      the visible clip effect looked superficially similar to correct
+--      rendering, the regression persisted across multiple iterations
+--      of the hscroll work. Fix: convert leftcol to a byte offset via
+--      str.col_to_byte(row.text, leftcol) before passing to
+--      nvim_buf_set_extmark. This property is now I7 below.
+--
+-- A note on the Layer 2 probe: inspecting screen output alone cannot
+-- distinguish "overlay is placed correctly" from "overlay was shifted
+-- by N cols and the leading N cols got clipped offscreen" -- both
+-- produce the same visible grid. Detecting bug 3 required either a
+-- Layer 1 assertion about the extmark's byte col, or a Layer 2 probe
+-- of screenattr to notice that leading cells had the buffer's
+-- highlight rather than the overlay's.
 
 ------------------------------------------------------------
 -- External Entities
@@ -397,6 +419,34 @@ invariant ClipPreservesDisplayWidth {
             let trim = max_zero(w.leftcol - table.delim.node_start_col)
             trim < base implies
                 clipped_row_width(w) = base - trim
+}
+
+-- I7. A scrolled overlay extmark is anchored at the BYTE offset whose
+-- display-column position equals leftcol, not at the byte value of
+-- leftcol itself. nvim_buf_set_extmark interprets `col` as a byte
+-- offset; leftcol is a display column. For ASCII-only rows the two
+-- coincide, but for rows containing multi-byte glyphs (emoji, CJK)
+-- before leftcol, display_col < byte_offset and the two diverge.
+-- Passing leftcol directly places the overlay at a buffer byte
+-- corresponding to a display column strictly less than leftcol;
+-- neovim then clips the overlay's leading display columns offscreen
+-- when rendering, so the visible result is the overlay shifted right
+-- by the clipped amount. The fix is to compute byte_offset =
+-- col_to_byte(row.text, leftcol) and pass that.
+--
+-- This invariant is independent of I1-I6, which all speak to overlay
+-- CONTENT. I7 speaks to overlay PLACEMENT. A row can satisfy I1, I4,
+-- and I6 (correct content, correct width) while still violating I7
+-- (placed at the wrong buffer position), because the visible symptom
+-- of wrong placement is indistinguishable from correct placement when
+-- viewed purely as a screen grid -- the shifted overlay gets clipped
+-- and the clipped right edge matches the unshifted right edge.
+invariant OverlayMarkAtDisplayColByteOffset {
+    for table in Tables:
+        for w in Windows where w.leftcol > 0:
+            for row in table.rows ++ [table.delim]:
+                overlay_extmark_col_of(row, w) =
+                    byte_offset_of_display_col(row.text, w.leftcol)
 }
 
 ------------------------------------------------------------
