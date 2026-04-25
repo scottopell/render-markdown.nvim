@@ -4,6 +4,7 @@
 ---@field preset? render.md.config.Preset
 ---@field log_level? render.md.log.Level
 ---@field log_runtime? boolean
+---@field render_in_diff? boolean
 ---@field file_types? string[]
 ---@field max_file_size? number
 ---@field ignore? fun(buf: integer): boolean
