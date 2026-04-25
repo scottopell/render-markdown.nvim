@@ -1597,6 +1597,14 @@ M.pipe_table.default = {
     -- | padded  | raw + cells are padded to maximum visual width for each column                    |
     -- | trimmed | padded except empty space is subtracted from visual width calculation             |
     -- | wrap    | padded when the table fits, otherwise wraps cell contents to fit the window width |
+    --
+    -- Note on 'wrap': continuation lines are rendered as virt_lines, which the cursor
+    -- cannot enter. A single `j` therefore moves to the next buffer row, visually
+    -- skipping past every wrapped continuation line of the current row. This is a
+    -- deliberate tradeoff: the buffer stays 1:1 with the markdown source, so editing,
+    -- search, LSP, and diff tools continue to behave identically to the unwrapped
+    -- table. If you prefer per-display-line cursor motion, stay on 'padded' (and use
+    -- horizontal scroll for wide tables).
     cell = 'padded',
     -- Adjust the computed width of table cells using custom logic.
     cell_offset = function()

@@ -397,6 +397,37 @@ invariant WrapRequiresOptIn {
 }
 
 ------------------------------------------------------------
+-- Known limitations (resolved as accepted tradeoffs)
+------------------------------------------------------------
+
+-- L1. Cursor navigation across wrapped rows.
+--   `j` is buffer-line motion; the cursor moves one buffer line at a
+--   time regardless of how many display lines a wrapped row produces.
+--   Continuation lines are emitted as virt_lines, which are decoration
+--   only and cannot be entered by the cursor. So when a row wraps to
+--   3 display lines, a single `j` press visually skips past all 3.
+--   `gj` / `gk` (visual-line motion) does not help because virt_lines
+--   are not part of Vim's `:set wrap` model.
+--
+--   Considered alternatives:
+--     - Inject real buffer lines for continuations. Rejected: breaks
+--       the source-of-truth invariant (file no longer matches disk),
+--       breaks edits / undo / external tools / LSP positions. Not
+--       viable for a render-only plugin.
+--     - Truncate-only mode (`cell = 'truncate'`). Cursor moves one
+--       visual row per `j`, no jump. Cost is information loss. Could
+--       ship as a separate cell value alongside wrap if users ask;
+--       deferred for v1 because horizontal scroll already serves the
+--       "I just want to navigate quickly" case.
+--
+--   Decision for v1: accept the limitation. Document it on the
+--   pipe_table.cell config doc so users opt in with eyes open.
+--   Wrap is for "I want to read this small-pane table without
+--   horizontal scrolling"; users who want stable cursor motion can
+--   stay on `padded` and rely on hscroll, or wait for a future
+--   `truncate` mode.
+
+------------------------------------------------------------
 -- Open Questions
 ------------------------------------------------------------
 
@@ -408,6 +439,8 @@ open question "User-supplied per-column min/max widths (e.g. a Cell column that 
 
 open question "Re-wrap on cursor row change to give the cursor row a wider budget at the expense of others? Interesting but adds visual jitter; defer."
 
-open question "Honour 'breakat' for wrap point selection? Currently we wrap on whitespace only; matching :h breakat would let users tune behaviour."
+open question "Honour 'breakat' for wrap point selection? Currently we wrap on whitespace only; matching :h breakat would let users tune behaviour. Decided against for v1: hyperlinks must remain unbroken so terminal-emulator click-to-open keeps working, which is the dominant use case for long unbroken tokens in cells."
 
 open question "Behaviour when the window is too narrow to satisfy min_column_budget for every column (column_count * min_column_budget + column_count + 1 > text_width). Options: fall back to hscroll-overlay path, or accept overflow. v1 falls back to hscroll-overlay; revisit if it surfaces in real usage."
+
+open question "Truncate-only cell mode (`cell = 'truncate'`) as a sibling to `wrap` for users who prefer stable cursor motion over seeing full content. Deferred until there is demonstrated demand; horizontal scroll already covers the navigation-first use case."
