@@ -1569,6 +1569,7 @@ M.pipe_table.cell = {
     padded = 'padded',
     raw = 'raw',
     overlay = 'overlay',
+    wrap = 'wrap',
 }
 
 ---@enum render.md.table.Style
@@ -1591,10 +1592,11 @@ M.pipe_table.default = {
     -- | none   | does nothing                      |
     preset = 'none',
     -- Determines how individual cells of a table are rendered.
-    -- | overlay | writes completely over the table, removing conceal behavior and highlights |
-    -- | raw     | replaces only the '|' characters in each row, leaving the cells unmodified |
-    -- | padded  | raw + cells are padded to maximum visual width for each column             |
-    -- | trimmed | padded except empty space is subtracted from visual width calculation      |
+    -- | overlay | writes completely over the table, removing conceal behavior and highlights        |
+    -- | raw     | replaces only the '|' characters in each row, leaving the cells unmodified        |
+    -- | padded  | raw + cells are padded to maximum visual width for each column                    |
+    -- | trimmed | padded except empty space is subtracted from visual width calculation             |
+    -- | wrap    | padded when the table fits, otherwise wraps cell contents to fit the window width |
     cell = 'padded',
     -- Adjust the computed width of table cells using custom logic.
     cell_offset = function()

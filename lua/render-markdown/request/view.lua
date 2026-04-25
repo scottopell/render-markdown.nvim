@@ -7,6 +7,7 @@ local log = require('render-markdown.core.log')
 ---@field private buf integer
 ---@field private ranges render.md.Range[]
 ---@field private leftcol integer
+---@field private text_width integer
 local View = {}
 View.__index = View
 
@@ -17,13 +18,19 @@ function View.new(buf)
     self.buf = buf
     local ranges = {} ---@type render.md.Range[]
     local max_leftcol = 0
+    -- Use the minimum text_width across windows so the wrap path
+    -- produces output that fits all of them. Initialise to math.huge
+    -- and fall back to 0 only if no windows are showing the buffer.
+    local min_text_width = math.huge
     for _, win in ipairs(env.buf.wins(buf)) do
         ranges[#ranges + 1] = env.range(buf, win, 10)
         local view = env.win.view(win)
         max_leftcol = math.max(max_leftcol, view.leftcol)
+        min_text_width = math.min(min_text_width, env.win.width(win))
     end
     self.ranges = interval.coalesce(ranges)
     self.leftcol = max_leftcol
+    self.text_width = min_text_width == math.huge and 0 or min_text_width
     return self
 end
 
@@ -44,6 +51,11 @@ function View:contains(win)
     if view.leftcol ~= self.leftcol then
         return false
     end
+    -- Check if window text_width changed (resize) - the wrap path
+    -- depends on this, so a resize must force a re-render.
+    if env.win.width(win) ~= self.text_width then
+        return false
+    end
     -- Check if visible rows are contained
     local rows = env.range(self.buf, win, 0)
     for _, range in ipairs(self.ranges) do
@@ -57,6 +69,11 @@ end
 ---@return integer
 function View:get_leftcol()
     return self.leftcol
+end
+
+---@return integer
+function View:get_text_width()
+    return self.text_width
 end
 
 ---@param node TSNode

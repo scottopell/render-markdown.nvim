@@ -11,6 +11,10 @@ describe('view', function()
         for win, range in pairs(ranges) do
             env.range.on_call_with(0, win, 10).returns(range)
             env.win.view.on_call_with(win).returns({ leftcol = 0 })
+            -- View tracks min text_width across windows for the wrap
+            -- cell mode; provide a width so the constructor doesn't
+            -- explode in this mocked context.
+            env.win.width.on_call_with(win).returns(80)
         end
     end
 
