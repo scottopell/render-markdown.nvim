@@ -2,11 +2,27 @@ local Base = require('render-markdown.render.base')
 local iter = require('render-markdown.lib.iter')
 local log = require('render-markdown.core.log')
 local str = require('render-markdown.lib.str')
+local table_wrap = require('render-markdown.render.markdown.table_wrap')
 local ts = require('render-markdown.core.ts')
+
+-- Lower bound on a column's wrap budget (in display columns, including
+-- per-cell padding). Below this even a 1-character cell would render as
+-- pure padding, so wrap falls back to the non-wrap path instead.
+local MIN_COLUMN_BUDGET = 5
 
 ---@class render.md.table.Data
 ---@field delim render.md.table.DelimRow
 ---@field rows render.md.table.Row[]
+---@field wrap? render.md.table.WrapData
+
+---@class render.md.table.WrapData
+---@field budgets integer[]
+---@field rows render.md.table.WrapRow[]
+---@field indent integer
+
+---@class render.md.table.WrapRow
+---@field height integer
+---@field cells render.md.mark.Line[][]
 
 ---@class render.md.table.DelimRow
 ---@field node render.md.Node
@@ -116,7 +132,168 @@ function Render:setup()
 
     self.data = { delim = delim, rows = rows }
 
+    -- Auto-activate wrap mode when (a) the user opted in via cell='wrap'
+    -- and (b) the natural table width does not fit the window. Wrap
+    -- replaces delim.cols[i].width with the per-column budget, so the
+    -- subsequent delimiter / border logic produces the same widths the
+    -- wrapped row content was sized to.
+    if self.config.cell == 'wrap' then
+        self:try_activate_wrap()
+    end
+
     return true
+end
+
+---Attempt to activate wrap mode. On success, populates self.data.wrap
+---and rewrites delim.cols[i].width to the per-column budget so that the
+---existing delimiter / border rendering paths produce widths that match
+---the wrapped row content. On failure (table fits, window too narrow,
+---etc.) leaves self.data unchanged so rendering falls through to the
+---padded path.
+---@private
+function Render:try_activate_wrap()
+    local delim = self.data.delim
+    local n = #delim.cols
+    if n == 0 then
+        return
+    end
+
+    -- Total natural width of the table including pipes.
+    local natural_total = n + 1
+    for _, col in ipairs(delim.cols) do
+        natural_total = natural_total + col.width
+    end
+
+    local indent = str.spaces('start', delim.node.text)
+    local text_width = self.context.view:get_text_width()
+    local available = text_width - indent
+    if available <= 0 then
+        return
+    end
+
+    -- Auto-trigger: only wrap when the table actually doesn't fit. For
+    -- tables that already fit we want the padded path's exact output
+    -- (W6 in cell-wrapping.allium).
+    if natural_total <= available then
+        return
+    end
+
+    local natural_widths = iter.list.map(delim.cols, function(col)
+        return col.width
+    end)
+
+    local padding = self.config.padding
+    local row_highlight = self.config.row
+    local head_highlight = self.config.head
+
+    -- First pass: pre-tokenise each cell so we can (a) measure the
+    -- longest unsplittable word per column to set a per-column floor
+    -- (a column must be wide enough to hold its widest word, otherwise
+    -- the cell would overflow its budget and break row alignment) and
+    -- (b) avoid re-tokenising when packing into lines below.
+    local row_tokens = {} ---@type render.md.table.wrap.Token[][][]
+    local longest_word = {} ---@type integer[]
+    for i = 1, n do
+        longest_word[i] = 0
+    end
+    for r, row in ipairs(self.data.rows) do
+        local header = row.node.type == 'pipe_table_header'
+        local cell_hl = header and head_highlight or row_highlight
+        local row_start = row.node.start_col
+        local cells_tokens = {} ---@type render.md.table.wrap.Token[][]
+        for i = 1, n do
+            local content_start_byte = row.pipes[i].end_col - row_start
+            local content_end_byte = row.pipes[i + 1].start_col - row_start
+            local chunks = self:process_cell_content(
+                row.node,
+                content_start_byte,
+                content_end_byte,
+                cell_hl
+            )
+            chunks = self:trim_chunks(chunks)
+            local tokens = table_wrap.tokenise(chunks)
+            cells_tokens[i] = tokens
+            for _, tok in ipairs(tokens) do
+                if tok.kind == 'word' and tok.width > longest_word[i] then
+                    longest_word[i] = tok.width
+                end
+            end
+        end
+        row_tokens[r] = cells_tokens
+    end
+
+    -- Per-column floor: enough to hold the widest word plus padding.
+    -- Falls back to the global MIN_COLUMN_BUDGET when content is empty.
+    local floors = {} ---@type integer[]
+    for i = 1, n do
+        floors[i] = math.max(MIN_COLUMN_BUDGET, longest_word[i] + 2 * padding)
+    end
+
+    local budgets = table_wrap.allocate_budgets(natural_widths, available, floors)
+    if not budgets then
+        return
+    end
+
+    -- Second pass: pack the pre-tokenised cells into wrapped lines
+    -- using the resolved budgets.
+    local wrap_rows = {} ---@type render.md.table.WrapRow[]
+    for r in ipairs(self.data.rows) do
+        local cells = {} ---@type render.md.mark.Line[][]
+        local height = 1
+        for i = 1, n do
+            local content_budget = math.max(1, budgets[i] - 2 * padding)
+            local lines = table_wrap.pack(row_tokens[r][i], content_budget)
+            local cell_lines = {} ---@type render.md.mark.Line[]
+            for _, segs in ipairs(lines) do
+                local line = {} ---@type render.md.mark.Line
+                for _, seg in ipairs(segs) do
+                    line[#line + 1] = { seg.text, seg.highlight }
+                end
+                cell_lines[#cell_lines + 1] = line
+            end
+            cells[i] = cell_lines
+            if #cell_lines > height then
+                height = #cell_lines
+            end
+        end
+        wrap_rows[#wrap_rows + 1] = { height = height, cells = cells }
+    end
+
+    -- Rewrite delimiter widths to the budgets so delimiter() and
+    -- border() naturally produce the wrapped widths.
+    for i = 1, n do
+        delim.cols[i].width = budgets[i]
+    end
+
+    self.data.wrap = { budgets = budgets, rows = wrap_rows, indent = indent }
+end
+
+---Drop a leading and trailing whitespace-only run from a chunk list.
+---Used so wrapped cells don't carry the source's per-cell padding into
+---the wrap budget; padding is added back when composing display lines.
+---@private
+---@param chunks render.md.mark.Text[]
+---@return render.md.mark.Text[]
+function Render:trim_chunks(chunks)
+    local result = {} ---@type render.md.mark.Text[]
+    for _, c in ipairs(chunks) do
+        result[#result + 1] = { c[1], c[2] }
+    end
+    if #result > 0 then
+        local first = result[1]
+        first[1] = first[1]:gsub('^[ \t]+', '')
+        if first[1] == '' then
+            table.remove(result, 1)
+        end
+    end
+    if #result > 0 then
+        local last = result[#result]
+        last[1] = last[1]:gsub('[ \t]+$', '')
+        if last[1] == '' then
+            result[#result] = nil
+        end
+    end
+    return result
 end
 
 ---@private
@@ -132,7 +309,10 @@ function Render:parse_delim(node)
         local start_col, end_col = pipes[i].end_col, pipes[i + 1].start_col
         local width = end_col - start_col
         assert(width >= 0, 'invalid table layout')
-        if self.config.cell == 'padded' then
+        if self.config.cell == 'padded' or self.config.cell == 'wrap' then
+            -- 'wrap' uses the same initial natural width as 'padded';
+            -- if wrap activates, delim widths are overwritten with
+            -- budgets after setup() finishes width computation.
             width = math.max(width, self.config.min_width)
         elseif self.config.cell == 'trimmed' then
             width = self.config.min_width
@@ -225,8 +405,12 @@ end
 ---@protected
 function Render:run()
     self:delimiter()
-    for _, row in ipairs(self.data.rows) do
-        self:row(row)
+    for i, row in ipairs(self.data.rows) do
+        if self.data.wrap then
+            self:row_wrapped(row, i)
+        else
+            self:row(row)
+        end
     end
     if self.config.border_enabled then
         self:border()
@@ -559,8 +743,11 @@ function Render:delimiter()
     line:text(delimiter, self.config.head)
     line:pad(str.width(delim.node.text) - line:width())
 
-    -- Apply leftcol trimming for horizontal scroll
-    local leftcol = self.context.view:get_leftcol()
+    -- Apply leftcol trimming for horizontal scroll. Wrap mode and
+    -- hscroll-overlay are mutually exclusive (W5 in
+    -- cell-wrapping.allium); when wrap is active the table is
+    -- width-bounded to the window, so trim has no work to do.
+    local leftcol = not self.data.wrap and self.context.view:get_leftcol() or 0
     local start_col = delim.node.start_col
     local trim_amount = math.max(0, leftcol - start_col)
 
@@ -583,6 +770,125 @@ function Render:delimiter()
             virt_text = line:get(),
             virt_text_pos = 'overlay',
         })
+    end
+end
+
+---Pad a wrapped cell line up to its content budget, applying the
+---column's alignment. The result has length exactly `content_budget`
+---unless the segments themselves overflow it, in which case the
+---result is the segments unchanged (per-column floors normally
+---prevent this; the math.max guard exists as a safety net).
+---@private
+---@param segs render.md.mark.Line
+---@param content_budget integer
+---@param alignment render.md.table.Alignment
+---@return render.md.Line
+function Render:wrap_pad_cell(segs, content_budget, alignment)
+    local line = self:line()
+    local seg_width = 0
+    for _, seg in ipairs(segs) do
+        seg_width = seg_width + str.width(seg[1])
+    end
+    local fill = math.max(0, content_budget - seg_width)
+    if alignment == Alignment.right then
+        line:pad(fill)
+        for _, seg in ipairs(segs) do
+            line:text(seg[1], seg[2])
+        end
+    elseif alignment == Alignment.center then
+        local left = math.floor(fill / 2)
+        local right = fill - left
+        line:pad(left)
+        for _, seg in ipairs(segs) do
+            line:text(seg[1], seg[2])
+        end
+        line:pad(right)
+    else
+        for _, seg in ipairs(segs) do
+            line:text(seg[1], seg[2])
+        end
+        line:pad(fill)
+    end
+    return line
+end
+
+---Compose a single display line of a wrapped row by concatenating each
+---column's wrapped contents at index k (or empty if the column has no
+---line k), padded to its budget and surrounded by pipes. Used for both
+---the overlay (k=1) and virt_lines (k>=2) emissions. Leading indent
+---is handled at the caller site (the buffer source carries it for
+---k=1; the `Indent` helper prepends it for virt_lines).
+---@private
+---@param wrap_row render.md.table.WrapRow
+---@param k integer 1-based display-line index
+---@param highlight string
+---@return render.md.Line
+function Render:wrap_compose_line(wrap_row, k, highlight)
+    local line = self:line()
+    local icon = self.config.border[10]
+    local padding = self.config.padding
+    local delim_cols = self.data.delim.cols
+
+    line:text(icon, highlight)
+    for i, cell_lines in ipairs(wrap_row.cells) do
+        local segs = cell_lines[k] or {}
+        local budget = delim_cols[i].width
+        local content_budget = math.max(1, budget - 2 * padding)
+        line:pad(padding)
+        local content = self:wrap_pad_cell(
+            segs,
+            content_budget,
+            delim_cols[i].alignment
+        )
+        line:extend(content)
+        line:pad(padding)
+        line:text(icon, highlight)
+    end
+    return line
+end
+
+---Render a wrapped row. Display line 1 is emitted as a row-line overlay
+---(replacing the buffer line), and lines 2..H are emitted as virt_lines
+---anchored to the same buffer row. Hscroll trim is intentionally
+---bypassed because wrap is mutually exclusive with hscroll-overlay
+---(W5 in cell-wrapping.allium).
+---@private
+---@param row render.md.table.Row
+---@param row_idx integer
+function Render:row_wrapped(row, row_idx)
+    local wrap_row = self.data.wrap.rows[row_idx]
+    local header = row.node.type == 'pipe_table_header'
+    local highlight = header and self.config.head or self.config.row
+
+    -- Line 1: replace the buffer line with the first wrapped line.
+    local first = self:wrap_compose_line(wrap_row, 1, highlight)
+    self.marks:over(self.config, 'table_border', row.node, {
+        virt_text = first:get(),
+        virt_text_pos = 'overlay',
+    })
+
+    if wrap_row.height <= 1 then
+        return
+    end
+
+    -- Lines 2..H: emit as virt_lines so each occupies its own visual
+    -- row underneath the buffer line. Indentation is preserved by
+    -- prefixing each virtual line with the same leading spaces /
+    -- indent guides as the surrounding context produces.
+    local virt_lines = {} ---@type render.md.mark.Line[]
+    for k = 2, wrap_row.height do
+        local line = self:wrap_compose_line(wrap_row, k, highlight)
+        local full = self:indent():line(true):extend(line)
+        virt_lines[#virt_lines + 1] = full:get()
+    end
+    if #virt_lines > 0 then
+        self.marks:add(
+            self.config,
+            'virtual_lines',
+            row.node.start_row,
+            0,
+            { virt_lines = virt_lines }
+        )
     end
 end
 
@@ -625,7 +931,14 @@ function Render:row(row)
         return
     end
 
-    if vim.tbl_contains({ 'trimmed', 'padded', 'raw' }, self.config.cell) then
+    -- When cell='wrap' but wrap didn't activate (table fits / window
+    -- too narrow), fall through to padded behaviour for this row.
+    local effective_cell = self.config.cell
+    if effective_cell == 'wrap' then
+        effective_cell = 'padded'
+    end
+
+    if vim.tbl_contains({ 'trimmed', 'padded', 'raw' }, effective_cell) then
         for _, pipe in ipairs(row.pipes) do
             self.marks:over(self.config, 'table_border', pipe, {
                 virt_text = { { icon, highlight } },
@@ -634,7 +947,7 @@ function Render:row(row)
         end
     end
 
-    if vim.tbl_contains({ 'trimmed', 'padded' }, self.config.cell) then
+    if vim.tbl_contains({ 'trimmed', 'padded' }, effective_cell) then
         for i, col in ipairs(row.cols) do
             local delim = self.data.delim.cols[i]
             local space = col.space
@@ -666,7 +979,7 @@ function Render:row(row)
                 self:shift(col, 'right', fill + shift)
             end
         end
-    elseif self.config.cell == 'overlay' then
+    elseif effective_cell == 'overlay' then
         self.marks:over(self.config, 'table_border', row.node, {
             virt_text = { { row.node.text:gsub('|', icon), highlight } },
             virt_text_pos = 'overlay',
@@ -708,6 +1021,11 @@ function Render:border()
     local function width_equal(row)
         if vim.tbl_contains({ 'trimmed', 'padded' }, self.config.cell) then
             -- assume table was modified to match
+            return true
+        elseif self.config.cell == 'wrap' then
+            -- wrap mode rebuilds rows to delim widths (active path) or
+            -- falls through to padded (inactive path) - either way the
+            -- row widths visually match the delimiter
             return true
         elseif self.config.cell == 'raw' then
             -- want the computed widths to match

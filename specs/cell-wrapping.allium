@@ -1,0 +1,446 @@
+-- allium: 3
+-- cell-wrapping.allium
+
+-- Scope: Auto-wrapping pipe table cell contents to fit window width
+-- Includes:
+--   - When wrap mode activates (config + width threshold)
+--   - Per-column budget allocation when active
+--   - Cell wrapping into multiple display lines at word boundaries
+--   - Preservation of inline styling (bold/italic/code) across wrap points
+--   - Row height = max wrapped-line count across cells in the row
+--   - Border / delimiter widths conform to budgets, not natural widths
+--   - Interaction with horizontal scroll (mutually exclusive)
+-- Excludes:
+--   - Markdown parsing (handled upstream)
+--   - The neovim virt_lines / virt_text API itself (treated as a sink)
+--   - Non-table rendering
+--   - Other cell modes (padded / trimmed / raw / overlay) — referenced
+--     only where wrap interacts with them.
+--
+-- Why wrap
+--   Tables wider than the window currently force the user to horizontally
+--   scroll (commit de241ea). For prose-heavy tables in narrow panes this
+--   is painful; wrap presents the same data laid out vertically inside
+--   each column. Adopted as opt-in via cell = 'wrap' so existing setups
+--   are unaffected.
+--
+-- Design choices captured here
+--   1. Auto-trigger: even with cell = 'wrap', only wrap when the natural
+--      table width exceeds the window's text width; otherwise fall back
+--      to padded behaviour. This avoids reflowing tables that already
+--      fit, where wrap would harm readability.
+--   2. virt_lines below: wrapped continuation lines are emitted as
+--      virt_lines anchored to the original buffer row. This keeps the
+--      buffer 1:1 with the source markdown and leaves cursor / edit /
+--      search behaviour unchanged.
+--   3. Row alignment: every cell in a row receives the same row height
+--      (max across cells); shorter cells are bottom-padded with spaces
+--      so that pipes line up vertically across all wrapped lines.
+--   4. Hscroll mutual exclusion: when wrap is active the table is
+--      width-constrained to the window, so leftcol-trim has no work to
+--      do. The two paths are mutually exclusive — when wrap fires, the
+--      hscroll trim path is skipped.
+--   5. Inline styling preserved: chunk lists from process_cell_content
+--      are split at wrap points without losing per-chunk highlights.
+--
+-- The natural-width / window-width comparison is performed once per
+-- render and uses the minimum textspace width across windows showing
+-- the buffer (consistent with how max leftcol is computed today).
+
+------------------------------------------------------------
+-- External Entities
+------------------------------------------------------------
+
+-- Editor window. Adds `text_width` (display columns available for
+-- buffer content, excluding sign / number / fold columns) to the
+-- properties this spec cares about. The horizontal-scroll spec covers
+-- leftcol; here we only need text_width.
+external entity Window {
+    leftcol: Integer
+    width: Integer
+    text_width: Integer
+}
+
+-- Buffer whose contents are being rendered. Same role as in
+-- horizontal-scroll.allium.
+external entity Buffer {
+    changedtick: Integer
+}
+
+-- Rendered output sink. A wrapped table emits two flavours of extmark:
+--   * `overlay` extmarks on each row's buffer line (the first display
+--     line of that row), exactly like the unwrapped path.
+--   * `virt_lines` extmarks for continuation lines (display lines 2..n
+--     of each row) and for top / bottom borders when needed.
+external entity Extmark {
+    buffer: Buffer
+    row: Integer
+    col: Integer
+    text: String
+    full_line: Boolean
+    is_virt_line: Boolean
+}
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+-- A styled span of text within a cell. Width is measured in display
+-- columns. Highlight is the resolved highlight group name (e.g. the
+-- default row highlight, or a markup group for inline emphasis / code).
+value Chunk {
+    text: String
+    highlight: String
+    display_width: Integer
+}
+
+-- The result of word-wrapping a cell to a budget: an ordered list of
+-- display lines, each itself a list of chunks. Empty cells produce a
+-- single empty line.
+value WrappedCell {
+    lines: List<List<Chunk>>
+}
+
+-- Per-column wrap configuration for a single render. Budget is the
+-- display-column allowance for cell content (excluding pipes and the
+-- per-cell padding). Alignment is inherited from the delimiter and
+-- governs how short wrapped lines pad to budget within their column.
+value ColumnPlan {
+    budget: Integer
+    alignment: left | center | right | default
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+-- Cell rendering modes. `wrap` is the new value introduced by this
+-- spec; the other four are unchanged from the existing behaviour.
+enum CellMode { padded | trimmed | raw | overlay | wrap }
+
+------------------------------------------------------------
+-- Entities
+------------------------------------------------------------
+
+-- Plugin configuration that this spec reads. Only the fields that
+-- influence wrapping are listed; everything else is out of scope.
+entity TableConfig {
+    cell: CellMode
+    padding: Integer
+    min_width: Integer
+}
+
+-- A pipe table being rendered, with the wrap-relevant projections.
+-- `natural_width` is what the table would render at without any
+-- wrapping (i.e. the sum of unwrapped column widths plus pipes). It is
+-- the threshold used by AutoActivateWrap: if natural_width fits the
+-- window's text_width, the wrap path is skipped even when cell = wrap.
+entity Table {
+    buffer: Buffer
+    config: TableConfig
+    natural_width: Integer
+    column_count: Integer
+}
+
+-- Concrete plan for rendering a table under wrap mode for a particular
+-- window. Created when AutoActivateWrap fires; consumed by the rules
+-- that emit extmarks. The total of column budgets plus pipes equals
+-- the window's text_width (see invariant TotalRenderedWidthFitsWindow).
+entity WrapPlan {
+    table: Table
+    window: Window
+    columns: List<ColumnPlan>
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    -- Lower bound on a column's wrap budget. A column whose
+    -- proportional share would fall below this is rounded up; the
+    -- shortfall is taken from columns whose share exceeds this floor.
+    -- Prevents pathological 0/1-column-wide cells in narrow panes.
+    min_column_budget: Integer = 3
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+-- I. Wrap-mode activation. Wrap fires only when (a) the user opted in
+-- via cell = wrap and (b) the natural table width does not fit the
+-- window. Otherwise rendering falls through to the existing padded /
+-- trimmed / raw / overlay paths, which this spec leaves untouched.
+rule AutoActivateWrap {
+    when: RenderTable(table, window)
+    requires: table.config.cell = wrap
+    requires: table.natural_width > window.text_width
+
+    let plan = build_wrap_plan(table, window)
+    ensures: WrapPlan.created(table: table, window: window, columns: plan.columns)
+    ensures: WrapTableRequested(table: table, window: window)
+}
+
+-- II. Hscroll suppression. When wrap fires, the leftcol-trim render
+-- paths from horizontal-scroll.allium are skipped: the table is now
+-- bounded by the window width, so there is nothing to scroll past.
+-- Captured here to make the mutual exclusion explicit.
+rule WrapSuppressesHscrollOverlay {
+    when: WrapTableRequested(table, window)
+    ensures: not RenderDelimWhenScrolled(table, window)
+    ensures: not RenderRowWhenScrolled(table, window)
+}
+
+-- III. Column budget allocation. Each column receives a share of the
+-- available budget proportional to its natural width, clamped below by
+-- min_column_budget. The remainder after clamping is redistributed
+-- from columns whose natural share exceeded the floor. Total budget
+-- plus inter-column pipes equals window.text_width.
+rule AllocateColumnBudgets {
+    when: WrapPlan.created(plan)
+    ensures:
+        for col in plan.columns:
+            col.budget >= config.min_column_budget
+    ensures:
+        sum(col.budget for col in plan.columns) +
+            plan.table.column_count + 1 = plan.window.text_width
+}
+
+-- IV. Per-cell wrapping. Each cell is wrapped to its column's budget,
+-- breaking at whitespace. A single token longer than the budget
+-- occupies its own line and is allowed to overflow the budget by up
+-- to one token's width; this is preferable to silently truncating
+-- user content. Inline highlights are preserved per chunk: a chunk
+-- that crosses a wrap point is split into segments that each retain
+-- the original highlight.
+rule WrapCellContent {
+    when: WrapTableRequested(table, window)
+    let plan = WrapPlan{table: table, window: window}
+    requires: exists plan
+    ensures:
+        for row in table.rows:
+            for i in 1..table.column_count:
+                let cell = row.cells[i]
+                let col_plan = plan.columns[i]
+                let wrapped = word_wrap(cell.chunks, col_plan.budget)
+                WrappedCell.created(
+                    row: row,
+                    column: i,
+                    lines: wrapped.lines
+                )
+}
+
+-- V. Row layout. The row's display height is the maximum wrapped-line
+-- count across its cells. Cells with fewer lines are bottom-padded
+-- with empty lines so pipes align vertically across the row.
+rule ComposeRowHeight {
+    when: WrappedCell.created(row: row)
+    let cells_in_row = WrappedCells where row = row
+    requires: cells_in_row.count = row.owner.column_count
+
+    let row_height = max(cell.lines.count for cell in cells_in_row)
+    ensures: row.display_height = row_height
+}
+
+-- VI. Emit row extmarks. The first display line of each row replaces
+-- the buffer line via an `overlay` extmark on that row (mirrors the
+-- existing padded path). The remaining row_height - 1 display lines
+-- are emitted as virt_lines anchored to the same buffer row, each
+-- containing every column reconstructed at its budget.
+rule EmitWrappedRow {
+    when: row.display_height becomes positive
+    let plan = WrapPlan{table: row.owner}
+    requires: exists plan
+
+    ensures: Extmark.created(
+        buffer: row.owner.buffer,
+        row: row_line_of(row),
+        col: row.node_start_col,
+        text: compose_display_line(row, plan, 1),
+        full_line: true,
+        is_virt_line: false
+    )
+    ensures:
+        for k in 2..row.display_height:
+            Extmark.created(
+                buffer: row.owner.buffer,
+                row: row_line_of(row),
+                col: 0,
+                text: compose_display_line(row, plan, k),
+                full_line: true,
+                is_virt_line: true
+            )
+}
+
+-- VII. Border alignment under wrap. Top and bottom borders are
+-- regenerated against the wrap plan's column budgets so the corners
+-- and segment widths match the wrapped table, not the natural one.
+rule RenderBordersUnderWrap {
+    when: WrapPlan.created(plan)
+    requires: plan.table.config.border_enabled
+
+    ensures: Extmark.created(
+        buffer: plan.table.buffer,
+        row: top_border_line(plan.table),
+        col: 0,
+        text: top_border_for_plan(plan),
+        full_line: false,
+        is_virt_line: needs_virt_border(plan.table, above: true)
+    )
+    ensures: Extmark.created(
+        buffer: plan.table.buffer,
+        row: bottom_border_line(plan.table),
+        col: 0,
+        text: bottom_border_for_plan(plan),
+        full_line: false,
+        is_virt_line: needs_virt_border(plan.table, above: false)
+    )
+}
+
+-- VIII. Window resize / scroll updates. When window.text_width
+-- changes, the cached WrapPlan is invalidated and a fresh render
+-- request is issued. This piggybacks on the existing render-request
+-- machinery (DebounceLeadingEdge / DebounceFlushPending in
+-- horizontal-scroll.allium); no new debounce path is needed.
+rule InvalidateOnResize {
+    when: window: Window.text_width transitions_to _
+    ensures:
+        for buffer in buffers_of(window):
+            RenderRequested(buffer: buffer)
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+-- W1. No wrapped line exceeds its column's budget, except when a
+-- single token alone is wider than the budget (in which case the
+-- token occupies its own line and is allowed to overflow). The
+-- exception is necessary because a URL or unbroken word longer than
+-- the budget cannot be split without harming user content.
+invariant WrappedLineWidthFitsBudget {
+    for plan in WrapPlans:
+        for cell in WrappedCells where row.owner = plan.table:
+            for line in cell.lines:
+                line_width(line) <= plan.columns[cell.column].budget
+                or line.tokens.count = 1
+}
+
+-- W2. Splitting a chunk at a wrap point preserves its highlight on
+-- every resulting segment. Without this, bold or code spans that
+-- straddle a wrap point would lose styling on the second half.
+invariant ChunksPreserveHighlightAcrossWraps {
+    for cell in WrappedCells:
+        for original_chunk in cell.source_chunks:
+            for segment in segments_derived_from(original_chunk):
+                segment.highlight = original_chunk.highlight
+}
+
+-- W3. The total rendered width of a wrapped table equals the
+-- window's text_width: sum of column budgets plus the column_count + 1
+-- vertical pipes. Borders and per-row display lines all conform to
+-- this same total.
+invariant TotalRenderedWidthFitsWindow {
+    for plan in WrapPlans:
+        sum(c.budget for c in plan.columns) + plan.table.column_count + 1
+            = plan.window.text_width
+}
+
+-- W4. Every cell of a row produces the same number of display lines
+-- (the row's display_height), achieved by bottom-padding shorter
+-- cells with empty lines. This is what keeps pipes aligned vertically
+-- across all wrapped rows.
+invariant RowHeightUniformAcrossCells {
+    for row in Rows where row.owner.config.cell = wrap:
+        for cell in WrappedCells where cell.row = row:
+            cell.lines.count = row.display_height
+}
+
+-- W5. Wrap and hscroll-overlay are mutually exclusive: at most one of
+-- the two render paths emits extmarks for any given (table, window)
+-- pair. Captured to rule out double-overlays from a code path that
+-- forgets to gate one of the two.
+invariant WrapAndHscrollAreMutuallyExclusive {
+    for table in Tables:
+        for w in Windows:
+            not (wrap_active(table, w) and hscroll_overlay_active(table, w))
+}
+
+-- W6. When cell = wrap but the table already fits (natural_width <=
+-- text_width), the rendering path is identical to cell = padded. This
+-- is the auto-trigger property: opting into wrap is non-destructive
+-- for tables that don't need it.
+invariant WrapIsNoOpWhenTableFits {
+    for table in Tables where table.config.cell = wrap:
+        for w in Windows where table.natural_width <= w.text_width:
+            render_output(table, w) = render_output_as_padded(table, w)
+}
+
+-- W7. A single token wider than the budget is rendered intact (never
+-- split mid-token). This is the dual of W1's exception: W1 says the
+-- line may exceed budget; W7 says we never break a token to avoid
+-- exceeding budget.
+invariant LongTokensRenderedIntact {
+    for plan in WrapPlans:
+        for cell in WrappedCells where row.owner = plan.table:
+            for token in cell.source_tokens:
+                exists line in cell.lines where token.text in line
+}
+
+-- W8. Wrap is gated on the user opting in. With any cell mode other
+-- than wrap, no WrapPlan is created and no virt_lines for cell content
+-- are emitted, regardless of natural_width vs text_width.
+invariant WrapRequiresOptIn {
+    for table in Tables where table.config.cell != wrap:
+        not exists WrapPlan with table = table
+}
+
+------------------------------------------------------------
+-- Known limitations (resolved as accepted tradeoffs)
+------------------------------------------------------------
+
+-- L1. Cursor navigation across wrapped rows.
+--   `j` is buffer-line motion; the cursor moves one buffer line at a
+--   time regardless of how many display lines a wrapped row produces.
+--   Continuation lines are emitted as virt_lines, which are decoration
+--   only and cannot be entered by the cursor. So when a row wraps to
+--   3 display lines, a single `j` press visually skips past all 3.
+--   `gj` / `gk` (visual-line motion) does not help because virt_lines
+--   are not part of Vim's `:set wrap` model.
+--
+--   Considered alternatives:
+--     - Inject real buffer lines for continuations. Rejected: breaks
+--       the source-of-truth invariant (file no longer matches disk),
+--       breaks edits / undo / external tools / LSP positions. Not
+--       viable for a render-only plugin.
+--     - Truncate-only mode (`cell = 'truncate'`). Cursor moves one
+--       visual row per `j`, no jump. Cost is information loss. Could
+--       ship as a separate cell value alongside wrap if users ask;
+--       deferred for v1 because horizontal scroll already serves the
+--       "I just want to navigate quickly" case.
+--
+--   Decision for v1: accept the limitation. Document it on the
+--   pipe_table.cell config doc so users opt in with eyes open.
+--   Wrap is for "I want to read this small-pane table without
+--   horizontal scrolling"; users who want stable cursor motion can
+--   stay on `padded` and rely on hscroll, or wait for a future
+--   `truncate` mode.
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+-- The following are deliberately deferred. They are quality-of-life
+-- improvements that would build on the wrap path but are not blocking
+-- for the initial implementation:
+
+open question "User-supplied per-column min/max widths (e.g. a Cell column that should never wrap below 20)? Out of scope for v1; would be a TableConfig.column_constraints field."
+
+open question "Re-wrap on cursor row change to give the cursor row a wider budget at the expense of others? Interesting but adds visual jitter; defer."
+
+open question "Honour 'breakat' for wrap point selection? Currently we wrap on whitespace only; matching :h breakat would let users tune behaviour. Decided against for v1: hyperlinks must remain unbroken so terminal-emulator click-to-open keeps working, which is the dominant use case for long unbroken tokens in cells."
+
+open question "Behaviour when the window is too narrow to satisfy min_column_budget for every column (column_count * min_column_budget + column_count + 1 > text_width). Options: fall back to hscroll-overlay path, or accept overflow. v1 falls back to hscroll-overlay; revisit if it surfaces in real usage."
+
+open question "Truncate-only cell mode (`cell = 'truncate'`) as a sibling to `wrap` for users who prefer stable cursor motion over seeing full content. Deferred until there is demonstrated demand; horizontal scroll already covers the navigation-first use case."
